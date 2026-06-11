@@ -1,0 +1,74 @@
+{
+  "traces": [
+    {
+      "file": "delivery_sim_chongqing_1026_12tasks_3agents.json",
+      "label": "重庆市 1026 · 12 tasks · 3 agents",
+      "city": "重庆市",
+      "day": "1026",
+      "tasks": 12,
+      "drones": 3,
+      "step_seconds": 20,
+      "size_bytes": 389290
+    },
+    {
+      "file": "delivery_sim_chongqing_1026_5000tasks_100agents.json",
+      "label": "重庆市 1026 · 5000 tasks · 100 agents",
+      "city": "重庆市",
+      "day": "1026",
+      "tasks": 5000,
+      "drones": 100,
+      "step_seconds": 5,
+      "size_bytes": 57796611
+    },
+    {
+      "file": "delivery_sim_current.json",
+      "label": "重庆市 1026 · 5000 tasks · 50 agents",
+      "city": "重庆市",
+      "day": "1026",
+      "tasks": 5000,
+      "drones": 50,
+      "step_seconds": 5,
+      "size_bytes": 344058974
+    },
+    {
+      "file": "delivery_sim_jilin.json",
+      "label": "重庆市 1026 · 5000 tasks · 50 agents",
+      "city": "重庆市",
+      "day": "1026",
+      "tasks": 5000,
+      "drones": 50,
+      "step_seconds": 5,
+      "size_bytes": 263048040
+    },
+    {
+      "file": "delivery_sim_jilin01.json",
+      "label": "吉林市 0925 · 120 tasks · 5 agents",
+      "city": "吉林市",
+      "day": "0925",
+      "tasks": 120,
+      "drones": 5,
+      "step_seconds": 20,
+      "size_bytes": 3434431
+    },
+    {
+      "file": "delivery_sim_jilin_0925_50tasks_5agents.json",
+      "label": "吉林市 0925 · 50 tasks · 5 agents",
+      "city": "吉林市",
+      "day": "0925",
+      "tasks": 50,
+      "drones": 5,
+      "step_seconds": 5,
+      "size_bytes": 3946148
+    },
+    {
+      "file": "delivery_sim_jilin_0925_5tasks_2agents.json",
+      "label": "吉林市 0925 · 5 tasks · 2 agents",
+      "city": "吉林市",
+      "day": "0925",
+      "tasks": 5,
+      "drones": 2,
+      "step_seconds": 20,
+      "size_bytes": 54788
+    }
+  ]
+}

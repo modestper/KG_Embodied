@@ -1,0 +1,115 @@
+
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LaDe 数据集浏览器</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="./assets/LaDe.png" alt="LaDe" />
+          <div>
+            <h1>LaDe Viewer</h1>
+            <p>Last-mile delivery dataset</p>
+          </div>
+        </div>
+
+        <section class="control-panel" aria-label="筛选">
+          <label>
+            任务类型
+            <select id="taskType">
+              <option value="delivery">Delivery</option>
+              <option value="pickup">Pickup</option>
+            </select>
+          </label>
+          <label>
+            城市
+            <select id="city"></select>
+          </label>
+        </section>
+
+        <section class="meta">
+          <span>数据源</span>
+          <strong id="sourceText">loading</strong>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h2>五城取派件时空概览</h2>
+            <p>城市规模、事件时间分布、抽样坐标和路网线段的交互式快照。</p>
+          </div>
+          <a class="text-link" href="./simulation.html">Drone 仿真</a>
+        </header>
+
+        <section class="kpis" aria-label="关键指标">
+          <article>
+            <span>任务量</span>
+            <strong id="totalTasks">-</strong>
+          </article>
+          <article>
+            <span>骑手数</span>
+            <strong id="totalCouriers">-</strong>
+          </article>
+          <article>
+            <span>AOI</span>
+            <strong id="totalAoi">-</strong>
+          </article>
+          <article>
+            <span>抽样点</span>
+            <strong id="sampleCount">-</strong>
+          </article>
+        </section>
+
+        <section class="visual-grid">
+          <article class="panel map-panel">
+            <div class="panel-head">
+              <h3>坐标抽样与路网</h3>
+              <span id="mapCaption">-</span>
+            </div>
+            <canvas id="mapCanvas" width="1100" height="650"></canvas>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <h3>小时分布</h3>
+              <span>0-23 时</span>
+            </div>
+            <div id="hourChart" class="hour-chart"></div>
+          </article>
+        </section>
+
+        <section class="panel table-panel">
+          <div class="panel-head">
+            <h3>城市明细</h3>
+            <span id="tableCaption">-</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>城市</th>
+                  <th>Delivery</th>
+                  <th>Pickup</th>
+                  <th>骑手</th>
+                  <th>AOI</th>
+                  <th>平均配送分钟</th>
+                  <th>平均揽收分钟</th>
+                </tr>
+              </thead>
+              <tbody id="cityTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="./src/app.mjs"></script>
+  </body>
+</html>

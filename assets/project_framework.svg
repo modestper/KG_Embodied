@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="860" viewBox="0 0 1400 860">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .bg { fill: #f7f9fb; }
+      .title { font: 700 34px Arial, sans-serif; fill: #172033; }
+      .subtitle { font: 400 18px Arial, sans-serif; fill: #526173; }
+      .box { fill: #ffffff; stroke: #cad5e1; stroke-width: 2; rx: 8; }
+      .box-blue { fill: #eef6ff; stroke: #7aa7d9; }
+      .box-green { fill: #eefaf4; stroke: #72b58b; }
+      .box-yellow { fill: #fff8e8; stroke: #d7a84c; }
+      .box-red { fill: #fff1f3; stroke: #d77a88; }
+      .label { font: 700 20px Arial, sans-serif; fill: #1f2937; }
+      .small { font: 400 15px Arial, sans-serif; fill: #526173; }
+      .tiny { font: 400 13px Arial, sans-serif; fill: #64748b; }
+      .arrow { stroke: #334155; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 8 6; }
+      .pill { fill: #f1f5f9; stroke: #cbd5e1; stroke-width: 1.5; rx: 16; }
+      .section { font: 700 16px Arial, sans-serif; fill: #334155; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1400" height="860"/>
+
+  <text x="70" y="66" class="title">LaDe 多飞行机器人协同配送项目框架</text>
+  <text x="70" y="98" class="subtitle">基于真实末端配送数据，构建多 agent 派送仿真、调度决策与网页可视化平台</text>
+
+  <!-- Data layer -->
+  <text x="70" y="145" class="section">1. 数据与场景</text>
+  <rect x="70" y="165" width="270" height="160" class="box box-blue"/>
+  <text x="95" y="205" class="label">LaDe Delivery 数据</text>
+  <text x="95" y="236" class="small">城市 / 日期 / region</text>
+  <text x="95" y="262" class="small">订单坐标 / AOI</text>
+  <text x="95" y="288" class="small">release time / deadline</text>
+
+  <rect x="390" y="165" width="270" height="160" class="box box-blue"/>
+  <text x="415" y="205" class="label">任务子集选择</text>
+  <text x="415" y="236" class="small">city: Yantai / Jilin ...</text>
+  <text x="415" y="262" class="small">day: 0618 / 0925 ...</text>
+  <text x="415" y="288" class="small">task_limit 控制规模</text>
+
+  <rect x="710" y="165" width="270" height="160" class="box box-green"/>
+  <text x="735" y="205" class="label">虚拟 Depot 构建</text>
+  <text x="735" y="236" class="small">region depot: 按 region 聚合</text>
+  <text x="735" y="262" class="small">center depot: 全局中心</text>
+  <text x="735" y="288" class="small">无人机从 depot 出发</text>
+
+  <!-- Simulation layer -->
+  <text x="70" y="395" class="section">2. 仿真环境</text>
+  <rect x="70" y="415" width="305" height="170" class="box box-green"/>
+  <text x="95" y="455" class="label">DeliveryTask</text>
+  <text x="95" y="486" class="small">任务 ID / region / 坐标</text>
+  <text x="95" y="512" class="small">释放时间 / 截止时间</text>
+  <text x="95" y="538" class="small">waiting / assigned / completed</text>
+
+  <rect x="430" y="415" width="305" height="170" class="box box-green"/>
+  <text x="455" y="455" class="label">DroneAgent</text>
+  <text x="455" y="486" class="small">位置 / 速度 / 容量 / 电量</text>
+  <text x="455" y="512" class="small">任务队列 queue</text>
+  <text x="455" y="538" class="small">执行 depot -> 派送点</text>
+
+  <rect x="790" y="415" width="305" height="170" class="box box-yellow"/>
+  <text x="815" y="455" class="label">SimulationEnv</text>
+  <text x="815" y="486" class="small">每个 step 释放任务</text>
+  <text x="815" y="512" class="small">调用调度器分配任务</text>
+  <text x="815" y="538" class="small">推进无人机并生成 frame</text>
+
+  <!-- Coordination layer -->
+  <text x="70" y="655" class="section">3. 协作调度与展示</text>
+  <rect x="70" y="675" width="260" height="130" class="box box-yellow"/>
+  <text x="95" y="715" class="label">规则拍卖调度</text>
+  <text x="95" y="746" class="small">距离 + 队列 + 迟到风险</text>
+  <text x="95" y="772" class="small">选择 cost 最低的 agent</text>
+
+  <rect x="390" y="675" width="260" height="130" class="box box-yellow"/>
+  <text x="415" y="715" class="label">KG 事件记忆</text>
+  <text x="415" y="746" class="small">task_assigned</text>
+  <text x="415" y="772" class="small">task_completed / late</text>
+
+  <rect x="710" y="675" width="260" height="130" class="box box-red"/>
+  <text x="735" y="715" class="label">LLM 区域调度</text>
+  <text x="735" y="746" class="small">按 region 批量决策</text>
+  <text x="735" y="772" class="small">使用 KG 最近上下文</text>
+
+  <rect x="1030" y="675" width="270" height="130" class="box box-blue"/>
+  <text x="1055" y="715" class="label">网页可视化</text>
+  <text x="1055" y="746" class="small">静态 trace 回放</text>
+  <text x="1055" y="772" class="small">动态 SSE 实时仿真</text>
+
+  <!-- Arrows -->
+  <path d="M340 245 H390" class="arrow"/>
+  <path d="M660 245 H710" class="arrow"/>
+  <path d="M845 325 V385 H222 V415" class="arrow"/>
+  <path d="M845 325 V385 H582 V415" class="arrow"/>
+  <path d="M735 500 H790" class="arrow"/>
+  <path d="M942 585 V645 H200 V675" class="arrow"/>
+  <path d="M942 585 V645 H520 V675" class="arrow"/>
+  <path d="M650 740 H710" class="arrow dash"/>
+  <path d="M970 740 H1030" class="arrow"/>
+  <path d="M330 740 H390" class="arrow dash"/>
+  <path d="M1095 500 C1220 500 1220 625 1165 675" class="arrow"/>
+
+  <!-- Step loop callout -->
+  <rect x="1130" y="415" width="300" height="170" class="box"/>
+  <text x="1155" y="455" class="label">每个 step 做什么</text>
+  <text x="1155" y="486" class="small">1. 释放当前时间任务</text>
+  <text x="1155" y="512" class="small">2. 分配给多个 agent</text>
+  <text x="1155" y="538" class="small">3. agent 飞行并完成任务</text>
+  <text x="1155" y="564" class="small">4. 记录 frame / KG 事件</text>
+
+  <!-- Metrics -->
+  <rect x="1030" y="165" width="300" height="160" class="box"/>
+  <text x="1055" y="205" class="label">评估指标</text>
+  <text x="1055" y="236" class="small">完成任务数 / 完成率</text>
+  <text x="1055" y="262" class="small">迟到任务数</text>
+  <text x="1055" y="288" class="small">总飞行距离 / agent 状态</text>
+
+  <path d="M980 245 H1030" class="arrow dash"/>
+  <path d="M1165 675 V610" class="arrow dash"/>
+
+  <!-- Footer -->
+  <rect x="70" y="825" width="1260" height="1.5" fill="#cbd5e1"/>
+  <text x="70" y="847" class="tiny">当前版本：delivery-only；depot 为任务几何中心构造的虚拟区域站点；调度支持规则拍卖和 LLM 区域批量决策。</text>
+</svg>

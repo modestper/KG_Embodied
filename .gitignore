@@ -1,0 +1,18 @@
+# Python/runtime cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node/local tooling
+node_modules/
+
+# Generated simulation traces. These can be hundreds of MB.
+data/delivery_sim*.json
+
+# Generated LLM call logs and readable exports.
+data/llm_logs/
+
+# Local editor/OS noise
+.DS_Store
+*.swp
+*.swo
