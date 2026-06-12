@@ -42,6 +42,9 @@ const els = {
   maxSteps: document.querySelector("#maxSteps"),
   frameStride: document.querySelector("#frameStride"),
   wallIntervalMs: document.querySelector("#wallIntervalMs"),
+  backend: document.querySelector("#backend"),
+  rayAddress: document.querySelector("#rayAddress"),
+  rayNumCpus: document.querySelector("#rayNumCpus"),
   useLlm: document.querySelector("#useLlm"),
   vllmApiBase: document.querySelector("#vllmApiBase"),
   vllmModel: document.querySelector("#vllmModel"),
@@ -158,6 +161,11 @@ function buildQuery() {
     vllm_model: els.vllmModel.value.trim() || "qwen2.5-7b",
     llm_max_tokens: normalizedInt(els.llmMaxTokens.value, 512),
   });
+  if (els.backend.value) params.set("backend", els.backend.value);
+  if (els.rayAddress.value.trim()) params.set("ray_address", els.rayAddress.value.trim());
+  if (els.rayNumCpus.value.trim()) {
+    params.set("ray_num_cpus", normalizedInt(els.rayNumCpus.value, 1));
+  }
   return params.toString();
 }
 
@@ -367,7 +375,15 @@ function render() {
   els.frameCaption.textContent = `frame ${state.frameIndex} · ${state.stepSeconds ?? "-"}s/step · buffer ${state.frameBuffer.length}`;
   els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
   els.runCaption.textContent = `${state.config.city} ${state.config.day} · ${state.config.task_limit} tasks · ${state.config.drone_count} agents`;
-  els.scenarioCaption.textContent = `${state.config.coordinator_class} + ${state.config.planner} · ${state.config.region_count} regions · LLM ${state.config.llm_enabled ? "on" : "off"}`;
+  els.scenarioCaption.textContent = [
+    `backend ${state.config.backend ?? "local"}`,
+    rayConfigLabel(state.config),
+    `${state.config.coordinator_class} + ${state.config.planner}`,
+    `${state.config.region_count} regions`,
+    `LLM ${state.config.llm_enabled ? "on" : "off"}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   els.agentCaption.textContent = state.config.depot_mode === "region" ? "region depot" : "center depot";
 
   renderAgentTable();
@@ -409,6 +425,14 @@ function renderRunStatus() {
   els.runStatus.dataset.status = "incomplete";
   els.runStatusTitle.textContent = "仿真已停止，但任务未全部完成";
   els.runStatusDetail.textContent = `达到最大帧数 ${state.donePayload.steps_run ?? state.config?.max_steps ?? "-"}，完成 ${completed}/${total}，仍有 ${unfinished} 个任务未完成`;
+}
+
+function rayConfigLabel(config) {
+  if ((config.backend ?? "local") !== "ray") return null;
+  const parts = [];
+  if (config.ray_address) parts.push(`address ${config.ray_address}`);
+  if (config.ray_num_cpus) parts.push(`${config.ray_num_cpus} CPUs`);
+  return parts.length ? `Ray ${parts.join(" · ")}` : "Ray local runtime";
 }
 
 function renderAgentTable() {

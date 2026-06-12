@@ -66,6 +66,22 @@
             推送间隔 ms
             <input id="wallIntervalMs" type="number" min="0" max="10000" step="10" value="250" />
           </label>
+          <label>
+            Backend
+            <select id="backend">
+              <option value="" selected>服务默认</option>
+              <option value="local">local</option>
+              <option value="ray">ray</option>
+            </select>
+          </label>
+          <label>
+            Ray address
+            <input id="rayAddress" type="text" placeholder="auto 或留空" />
+          </label>
+          <label>
+            Ray CPU 数
+            <input id="rayNumCpus" type="number" min="1" max="1024" step="1" placeholder="服务默认" />
+          </label>
           <label class="checkbox-row">
             <input id="useLlm" type="checkbox" />
             启用 LLM 调度
