@@ -1,8 +1,10 @@
 import argparse
 import json
 import unittest
+from unittest.mock import Mock, patch
 
-from scripts.run_dynamic_sim import args_from_request, format_sse, stream_simulation
+from scripts import run_dynamic_sim
+from scripts.run_dynamic_sim import DynamicHandler, args_from_request, format_sse, parse_args, stream_simulation
 from simulation.delivery_sim import AuctionCoordinator, DeliveryTask, DroneAgent, SimulationEnv
 from simulation.knowledge import TemporalKnowledgeStore
 
@@ -87,12 +89,16 @@ class DynamicServerTest(unittest.TestCase):
             vllm_api_base="http://127.0.0.1:6666/v1",
             vllm_model="qwen2.5-7b",
             llm_max_tokens=512,
+            backend="local",
+            ray_address="",
+            ray_num_cpus=None,
         )
 
         args = args_from_request(
             base_args,
             "/events?city=Chongqing&task_limit=50&drone_count=8&max_steps=600&"
-            "frame_stride=2&wall_interval=0.05&use_llm=1&vllm_model=test-model&llm_max_tokens=128",
+            "frame_stride=2&wall_interval=0.05&use_llm=1&vllm_model=test-model&llm_max_tokens=128&"
+            "backend=ray&ray_address=auto&ray_num_cpus=4",
         )
 
         self.assertEqual(args.city, "Chongqing")
@@ -104,6 +110,65 @@ class DynamicServerTest(unittest.TestCase):
         self.assertTrue(args.use_llm)
         self.assertEqual(args.vllm_model, "test-model")
         self.assertEqual(args.llm_max_tokens, 128)
+        self.assertEqual(args.backend, "ray")
+        self.assertEqual(args.ray_address, "auto")
+        self.assertEqual(args.ray_num_cpus, 8)
+
+    def test_initialize_ray_if_needed_starts_ray_for_ray_backend(self):
+        args = argparse.Namespace(backend="ray", ray_address="auto", ray_num_cpus=4)
+        fake_ray = Mock()
+        fake_ray.is_initialized.return_value = False
+        initializer = getattr(run_dynamic_sim, "initialize_ray_if_needed", None)
+        self.assertIsNotNone(initializer)
+
+        with patch.dict("sys.modules", {"ray": fake_ray}):
+            initializer(args)
+
+        fake_ray.init.assert_called_once_with(address="auto", num_cpus=4)
+
+    def test_initialize_ray_if_needed_restarts_ray_when_request_needs_more_cpus(self):
+        args = argparse.Namespace(backend="ray", ray_address="", ray_num_cpus=10)
+        fake_ray = Mock()
+        fake_ray.is_initialized.return_value = True
+        fake_ray.cluster_resources.return_value = {"CPU": 4.0}
+
+        with patch.dict("sys.modules", {"ray": fake_ray}):
+            run_dynamic_sim.initialize_ray_if_needed(args)
+
+        fake_ray.shutdown.assert_called_once()
+        fake_ray.init.assert_called_once_with(num_cpus=10)
+
+    def test_initialize_ray_if_needed_skips_local_backend(self):
+        args = argparse.Namespace(backend="local", ray_address="", ray_num_cpus=None)
+        fake_ray = Mock()
+        initializer = getattr(run_dynamic_sim, "initialize_ray_if_needed", None)
+        self.assertIsNotNone(initializer)
+
+        with patch.dict("sys.modules", {"ray": fake_ray}):
+            initializer(args)
+
+        fake_ray.init.assert_not_called()
+
+    def test_parse_args_defaults_allow_jilin_demo_to_reach_late_releases(self):
+        with patch("sys.argv", ["run_dynamic_sim.py"]):
+            args = parse_args()
+
+        self.assertEqual(args.max_steps, 2000)
+
+    def test_dynamic_handler_replaces_active_runtime(self):
+        previous = Mock()
+        current = Mock()
+        DynamicHandler.active_env = previous
+
+        DynamicHandler.replace_active_env(current)
+
+        previous.close.assert_called_once()
+        self.assertIs(DynamicHandler.active_env, current)
+
+        DynamicHandler.clear_active_env(current)
+
+        current.close.assert_called_once()
+        self.assertIsNone(DynamicHandler.active_env)
 
 
 if __name__ == "__main__":

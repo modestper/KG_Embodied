@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -31,6 +32,8 @@ def format_sse(event, payload):
 
 
 def step_once(env):
+    if hasattr(env, "step_once"):
+        return env.step_once()
     env.release_and_assign()
     completed_this_step = []
     next_time = env.now_minute + env.step_minutes
@@ -139,7 +142,19 @@ def build_runtime(args):
         for drone in drones:
             drone.planner = planner
         coordinator = build_coordinator_from_env()
-    env = SimulationEnv(tasks, drones, coordinator, step_minutes=args.step_seconds / 60)
+    if args.backend == "ray":
+        from simulation.ray_delivery_sim import RaySimulationEnv
+
+        env = RaySimulationEnv(
+            tasks,
+            drones,
+            coordinator,
+            step_minutes=args.step_seconds / 60,
+            ray_address=args.ray_address or None,
+            ray_num_cpus=args.ray_num_cpus,
+        )
+    else:
+        env = SimulationEnv(tasks, drones, coordinator, step_minutes=args.step_seconds / 60)
     config = {
         "city": tasks[0].city if tasks else args.city,
         "day": args.day if day_filter is not None else "all",
@@ -157,6 +172,9 @@ def build_runtime(args):
         "max_steps": args.max_steps,
         "frame_stride": args.frame_stride,
         "wall_interval": args.wall_interval,
+        "backend": args.backend,
+        "ray_address": args.ray_address,
+        "ray_num_cpus": args.ray_num_cpus,
     }
     write_run_start(args.llm_log_path, config)
     return env, config, list(region_depots.values())
@@ -238,9 +256,25 @@ class planner_environment:
 
 class DynamicHandler(SimpleHTTPRequestHandler):
     runtime_args = None
+    active_env = None
+    active_env_lock = threading.Lock()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(VIEWER_ROOT), **kwargs)
+
+    @classmethod
+    def replace_active_env(cls, env):
+        with cls.active_env_lock:
+            previous = cls.active_env
+            cls.active_env = env
+        close_env(previous)
+
+    @classmethod
+    def clear_active_env(cls, env):
+        with cls.active_env_lock:
+            if cls.active_env is env:
+                cls.active_env = None
+        close_env(env)
 
     def do_GET(self):
         if self.path in ("/", "/dynamic"):
@@ -258,21 +292,45 @@ class DynamicHandler(SimpleHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
 
-        env, config, depots = build_runtime(runtime_args)
-        for event in stream_simulation(env, config, depots, runtime_args.max_steps, runtime_args.frame_stride):
-            self.wfile.write(event.encode("utf-8"))
-            self.wfile.flush()
-            time.sleep(runtime_args.wall_interval)
+        env = None
+        try:
+            self.replace_active_env(None)
+            initialize_ray_if_needed(runtime_args)
+            env, config, depots = build_runtime(runtime_args)
+            self.replace_active_env(env)
+            for event in stream_simulation(env, config, depots, runtime_args.max_steps, runtime_args.frame_stride):
+                self.wfile.write(event.encode("utf-8"))
+                self.wfile.flush()
+                time.sleep(runtime_args.wall_interval)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            self.clear_active_env(env)
+
+
+def close_env(env):
+    close = getattr(env, "close", None)
+    if close:
+        close()
 
 
 def args_from_request(base_args, path):
     query = parse_qs(urlparse(path).query)
     values = vars(base_args).copy()
 
-    for key in ("city", "day", "depot_mode", "vllm_api_base", "vllm_model"):
+    for key in ("city", "day", "depot_mode", "vllm_api_base", "vllm_model", "backend", "ray_address"):
         if key in query:
             values[key] = query[key][0]
-    for key in ("task_limit", "drone_count", "step_seconds", "max_steps", "frame_stride", "seed", "llm_max_tokens"):
+    for key in (
+        "task_limit",
+        "drone_count",
+        "step_seconds",
+        "max_steps",
+        "frame_stride",
+        "seed",
+        "llm_max_tokens",
+        "ray_num_cpus",
+    ):
         if key in query:
             values[key] = parse_int(query[key][0], values[key], minimum=1)
     if "wall_interval" in query:
@@ -284,10 +342,14 @@ def args_from_request(base_args, path):
         values["city"] = base_args.city
     if values["depot_mode"] not in ("region", "center"):
         values["depot_mode"] = base_args.depot_mode
+    if values.get("backend") not in ("local", "ray"):
+        values["backend"] = getattr(base_args, "backend", "local")
     values["task_limit"] = min(values["task_limit"], 10000)
     values["drone_count"] = min(values["drone_count"], 1000)
     values["max_steps"] = min(values["max_steps"], 100000)
     values["llm_max_tokens"] = min(values["llm_max_tokens"], 4096)
+    if values["backend"] == "ray":
+        values["ray_num_cpus"] = max(values.get("ray_num_cpus") or 0, values["drone_count"])
     return argparse.Namespace(**values)
 
 
@@ -307,6 +369,26 @@ def parse_float(value, default, minimum=0):
     return max(minimum, parsed)
 
 
+def initialize_ray_if_needed(args):
+    if args.backend != "ray":
+        return
+    import ray
+
+    init_kwargs = {}
+    if args.ray_address:
+        init_kwargs["address"] = args.ray_address
+    if args.ray_num_cpus is not None:
+        init_kwargs["num_cpus"] = args.ray_num_cpus
+
+    if ray.is_initialized():
+        current_cpus = ray.cluster_resources().get("CPU", 0)
+        requested_cpus = args.ray_num_cpus or current_cpus
+        if current_cpus >= requested_cpus:
+            return
+        ray.shutdown()
+    ray.init(**init_kwargs)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run live drone delivery simulation viewer.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -316,7 +398,7 @@ def parse_args():
     parser.add_argument("--task-limit", type=int, default=20)
     parser.add_argument("--drone-count", type=int, default=3)
     parser.add_argument("--step-seconds", type=int, default=20)
-    parser.add_argument("--max-steps", type=int, default=1000)
+    parser.add_argument("--max-steps", type=int, default=2000)
     parser.add_argument("--frame-stride", type=int, default=1)
     parser.add_argument("--wall-interval", type=float, default=0.25)
     parser.add_argument("--depot-mode", choices=["region", "center"], default="region")
@@ -325,12 +407,16 @@ def parse_args():
     parser.add_argument("--vllm-api-base", default=os.environ.get("VLLM_API_BASE", "http://127.0.0.1:6666/v1"))
     parser.add_argument("--vllm-model", default=os.environ.get("VLLM_MODEL", "qwen2.5-7b"))
     parser.add_argument("--llm-max-tokens", type=int, default=int(os.environ.get("LLM_MAX_TOKENS", "512")))
+    parser.add_argument("--backend", choices=["local", "ray"], default="local")
+    parser.add_argument("--ray-address", default=os.environ.get("RAY_ADDRESS", ""))
+    parser.add_argument("--ray-num-cpus", type=int, default=None)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     DynamicHandler.runtime_args = args
+    initialize_ray_if_needed(args)
     server = ThreadingHTTPServer((args.host, args.port), DynamicHandler)
     print(f"Dynamic viewer: http://{args.host}:{args.port}/dynamic.html")
     server.serve_forever()
