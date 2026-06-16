@@ -170,6 +170,51 @@ class DynamicServerTest(unittest.TestCase):
         current.close.assert_called_once()
         self.assertIsNone(DynamicHandler.active_env)
 
+    def test_build_runtime_uses_knowledge_store_from_env(self):
+        class CustomKnowledgeStore(TemporalKnowledgeStore):
+            pass
+
+        custom_kg = CustomKnowledgeStore()
+        task = DeliveryTask(
+            task_id="task-1",
+            city="吉林市",
+            x=100,
+            y=0,
+            pickup_x=0,
+            pickup_y=0,
+            release_minute=480,
+            deadline_minute=520,
+            aoi_id="aoi-1",
+            region_id="31",
+        )
+        args = argparse.Namespace(
+            city="Jilin",
+            day="0925",
+            task_limit=1,
+            drone_count=1,
+            step_seconds=20,
+            max_steps=1,
+            frame_stride=1,
+            wall_interval=0.25,
+            depot_mode="region",
+            seed=13,
+            use_llm=False,
+            vllm_api_base="http://127.0.0.1:6666/v1",
+            vllm_model="qwen2.5-7b",
+            llm_max_tokens=512,
+            backend="local",
+            ray_address="",
+            ray_num_cpus=None,
+        )
+
+        with (
+            patch("scripts.run_dynamic_sim.load_delivery_tasks", return_value=[task]),
+            patch("scripts.run_dynamic_sim.build_knowledge_store_from_env", return_value=custom_kg),
+        ):
+            env, _config, _depots = run_dynamic_sim.build_runtime(args)
+
+        self.assertIs(env.knowledge_store, custom_kg)
+
 
 if __name__ == "__main__":
     unittest.main()

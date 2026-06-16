@@ -66,6 +66,33 @@ USE_LLM=1 ./run_ray_sim.sh
 USE_LLM=1 VLLM_MODEL=qwen2.5-7b VLLM_API_BASE=http://127.0.0.1:6666/v1 ./run_ray_sim.sh
 ```
 
+### 4. 启用 Neo4j 知识图谱
+
+默认使用内存 KG。启用 Neo4j 前先安装依赖并启动 Neo4j：
+
+```bash
+pip install neo4j
+```
+
+用环境变量切换 KG 后端：
+
+```bash
+KG_BACKEND=neo4j \
+NEO4J_URI=bolt://127.0.0.1:7687 \
+NEO4J_USER=neo4j \
+NEO4J_PASSWORD=your-password \
+./run_ray_sim.sh
+```
+
+当前 Neo4j schema：
+
+```text
+节点：Drone, Task, Region, Event
+关系：HOME_REGION, CURRENTLY_IN, BELONGS_TO, ABOUT_DRONE, ABOUT_TASK, IN_REGION, ASSIGNED, COMPLETED
+```
+
+Neo4j KG 会记录任务派单和完成事件，并为 LLM/KG 查询提供 `recent_agent_performance` 和 `recent_events`。
+
 ## 页面
 
 启动动态服务后打开：
@@ -120,6 +147,10 @@ CITY=Jilin DAY=0925 TASK_LIMIT=100 DRONE_COUNT=10 RAY_NUM_CPUS=10 ./run_ray_sim.
 | `USE_LLM` | `0` | 是否启用 LLM 调度 |
 | `RAY_ADDRESS` | 空 | Ray 集群地址，常用 `auto` |
 | `RAY_NUM_CPUS` | 空 | Ray 本地 runtime 可用 CPU 数 |
+| `KG_BACKEND` | `memory` | 知识图谱后端，支持 `memory` / `neo4j` |
+| `NEO4J_URI` | `bolt://127.0.0.1:7687` | Neo4j Bolt 地址 |
+| `NEO4J_USER` | `neo4j` | Neo4j 用户名 |
+| `NEO4J_PASSWORD` | 空 | Neo4j 密码 |
 
 ## 静态 trace
 

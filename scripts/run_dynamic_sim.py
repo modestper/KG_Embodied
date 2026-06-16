@@ -25,6 +25,7 @@ from simulation.delivery_sim import (
     make_region_drones,
 )
 from simulation.planner import build_coordinator_from_env, build_planner_from_env
+from simulation.knowledge import build_knowledge_store_from_env
 
 
 def format_sse(event, payload):
@@ -142,6 +143,7 @@ def build_runtime(args):
         for drone in drones:
             drone.planner = planner
         coordinator = build_coordinator_from_env()
+    knowledge_store = build_knowledge_store_from_env()
     if args.backend == "ray":
         from simulation.ray_delivery_sim import RaySimulationEnv
 
@@ -150,11 +152,18 @@ def build_runtime(args):
             drones,
             coordinator,
             step_minutes=args.step_seconds / 60,
+            knowledge_store=knowledge_store,
             ray_address=args.ray_address or None,
             ray_num_cpus=args.ray_num_cpus,
         )
     else:
-        env = SimulationEnv(tasks, drones, coordinator, step_minutes=args.step_seconds / 60)
+        env = SimulationEnv(
+            tasks,
+            drones,
+            coordinator,
+            step_minutes=args.step_seconds / 60,
+            knowledge_store=knowledge_store,
+        )
     config = {
         "city": tasks[0].city if tasks else args.city,
         "day": args.day if day_filter is not None else "all",
