@@ -1,3 +1,5 @@
+import { buildDynamicRegions, outlinePoints } from "./dynamic_regions.mjs";
+
 const colors = ["#1b8a6b", "#2866b6", "#b7791f", "#8a3ffc", "#c43d4b", "#4f6f52"];
 const minZoom = 0.25;
 const maxZoom = 50;
@@ -6,6 +8,7 @@ const state = {
   source: null,
   config: null,
   depots: [],
+  regions: [],
   tasks: [],
   frame: null,
   metrics: null,
@@ -119,6 +122,7 @@ function connect() {
     const payload = JSON.parse(event.data);
     state.config = payload.config;
     state.depots = payload.depots ?? [];
+    state.regions = payload.regions ?? [];
     state.tasks = payload.tasks ?? [];
     state.metrics = payload.metrics ?? null;
     state.stepSeconds = payload.step_seconds ?? null;
@@ -247,6 +251,7 @@ function renderPlaybackButton() {
 function resetRuntime() {
   state.config = null;
   state.depots = [];
+  state.regions = [];
   state.tasks = [];
   state.frame = null;
   state.metrics = null;
@@ -577,15 +582,18 @@ function renderCanvas() {
   const height = canvas.height / ratio;
   ctx.clearRect(0, 0, width, height);
 
+  const regions = currentRegions();
   const points = [
     ...state.tasks.map((task) => ({ x: task.x, y: task.y })),
     ...state.tasks.map((task) => ({ x: task.pickup_x, y: task.pickup_y })),
     ...state.depots.map((depot) => ({ x: depot.x, y: depot.y })),
+    ...regions.flatMap((region) => outlinePoints(region)),
     ...frame.drones.map((drone) => ({ x: drone.x, y: drone.y })),
-  ].filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  ].filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
 
   const project = makeProjector(getBounds(points), width, height, state.zoom, state.panX, state.panY);
   drawGrid(ctx, width, height);
+  drawRegionOutlines(ctx, project, regions);
   drawDepots(ctx, project);
   drawPickupLinks(ctx, project, frame);
   drawTasks(ctx, project, frame);
@@ -627,6 +635,50 @@ function drawGrid(ctx, width, height) {
     ctx.stroke();
   }
   ctx.restore();
+}
+
+function drawRegionOutlines(ctx, project, regions) {
+  if (!regions.length) return;
+  ctx.save();
+  ctx.lineWidth = 0.55;
+  ctx.globalAlpha = 0.28;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  for (const [index, region] of regions.entries()) {
+    const points = outlinePoints(region);
+    if (points.length < 2) continue;
+    ctx.strokeStyle = colors[index % colors.length];
+    drawClosedPath(ctx, points.map(project));
+  }
+  ctx.restore();
+
+  if (state.zoom < 2) return;
+  ctx.save();
+  ctx.font = "600 11px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.globalAlpha = 0.5;
+  for (const [index, region] of regions.entries()) {
+    if (!region.centroid) continue;
+    const point = project(region.centroid);
+    ctx.fillStyle = colors[index % colors.length];
+    ctx.fillText(`R${region.region_id}`, point.x, point.y - 12);
+  }
+  ctx.restore();
+}
+
+function drawClosedPath(ctx, points) {
+  ctx.beginPath();
+  for (const [index, point] of points.entries()) {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  }
+  if (points.length >= 3) ctx.closePath();
+  ctx.stroke();
+}
+
+function currentRegions() {
+  return state.regions.length ? state.regions : buildDynamicRegions(state.tasks);
 }
 
 function drawDepots(ctx, project) {

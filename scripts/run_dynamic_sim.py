@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 VIEWER_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = VIEWER_ROOT.parents[0]
 LLM_LOG_ROOT = VIEWER_ROOT / "data" / "llm_logs"
+REGION_BOUNDARY_PATH = VIEWER_ROOT / "data" / "region_boundaries.json"
 sys.path.insert(0, str(VIEWER_ROOT))
 
 from scripts.build_delivery_sim import CITY_FILES
@@ -76,12 +77,35 @@ def task_payload(task):
     }
 
 
+def active_region_boundaries(city, tasks):
+    active_region_ids = {task.region_id for task in tasks}
+    boundaries = load_region_boundaries(city)
+    return [
+        {
+            "region_id": region["region_id"],
+            "task_count": region["task_count"],
+            "centroid": region["centroid"],
+            "outline": region["polygon"],
+        }
+        for region in boundaries
+        if region["region_id"] in active_region_ids
+    ]
+
+
+def load_region_boundaries(city):
+    if not REGION_BOUNDARY_PATH.exists():
+        return []
+    payload = json.loads(REGION_BOUNDARY_PATH.read_text(encoding="utf-8"))
+    return payload.get("cities", {}).get(city, {}).get("regions", [])
+
+
 def stream_simulation(env, config, depots, max_steps, frame_stride=1):
     yield format_sse(
         "init",
         {
             "config": config,
             "depots": depots,
+            "regions": active_region_boundaries(config.get("city"), env.tasks),
             "tasks": [task_payload(task) for task in env.tasks],
             "metrics": metrics(env),
             "step_seconds": round(env.step_minutes * 60),

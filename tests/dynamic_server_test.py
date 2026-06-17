@@ -1,6 +1,8 @@
 import argparse
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from scripts import run_dynamic_sim
@@ -72,6 +74,41 @@ class DynamicServerTest(unittest.TestCase):
         self.assertEqual(done_payload["reason"], "max_steps_reached")
         self.assertEqual(done_payload["metrics"]["unfinished_tasks"], 1)
         self.assertEqual(done_payload["steps_run"], 1)
+
+    def test_stream_simulation_filters_stored_region_boundaries_to_active_regions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "region_boundaries.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "cities": {
+                            "吉林市": {
+                                "regions": [
+                                    {"region_id": "31", "task_count": 10, "centroid": {"x": 0, "y": 0}, "polygon": [[0, 0], [1, 0], [1, 1]]},
+                                    {"region_id": "88", "task_count": 8, "centroid": {"x": 10, "y": 10}, "polygon": [[10, 10], [11, 10], [11, 11]]},
+                                ]
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("scripts.run_dynamic_sim.REGION_BOUNDARY_PATH", path):
+                events = list(
+                    stream_simulation(
+                        self.make_env(),
+                        config={"city": "吉林市"},
+                        depots=[{"region_id": "31", "x": 0, "y": 0}],
+                        max_steps=1,
+                        frame_stride=1,
+                    )
+                )
+
+        init_payload = json.loads(events[0].split("data: ", 1)[1])
+        self.assertEqual([region["region_id"] for region in init_payload["regions"]], ["31"])
+        self.assertEqual(init_payload["regions"][0]["outline"], [[0, 0], [1, 0], [1, 1]])
 
     def test_args_from_request_overrides_runtime_fields(self):
         base_args = argparse.Namespace(
