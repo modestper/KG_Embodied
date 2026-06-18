@@ -78,6 +78,7 @@ pip install neo4j
 
 ```bash
 KG_BACKEND=neo4j \
+KG_RUN_ID=jilin-0925-exp001 \
 NEO4J_URI=bolt://127.0.0.1:7687 \
 NEO4J_USER=neo4j \
 NEO4J_PASSWORD=your-password \
@@ -87,11 +88,11 @@ NEO4J_PASSWORD=your-password \
 当前 Neo4j schema：
 
 ```text
-节点：Drone, Task, Region, Event
-关系：HOME_REGION, CURRENTLY_IN, BELONGS_TO, ABOUT_DRONE, ABOUT_TASK, IN_REGION, ASSIGNED, COMPLETED
+节点：Run, Drone, Task, Region, Event
+关系：IN_RUN, HOME_REGION, CURRENTLY_IN, BELONGS_TO, ABOUT_DRONE, ABOUT_TASK, IN_REGION, ASSIGNED, COMPLETED
 ```
 
-Neo4j KG 会记录任务派单和完成事件，并为 LLM/KG 查询提供 `recent_agent_performance` 和 `recent_events`。
+Neo4j KG 会记录任务派单和完成事件，并为 LLM/KG 查询提供 `recent_agent_performance` 和 `recent_events`。每次 Neo4j KG 运行都会绑定一个 `run_id`：如果设置 `KG_RUN_ID`，使用该值；否则自动生成 `run-<uuid>`。`Drone`、`Task`、`Region`、`Event` 都会通过 `IN_RUN` 关系挂到 `Run` 节点下，Neo4j 查询也会限定在当前 run 内，避免不同实验数据混淆。
 
 ## 页面
 
@@ -148,6 +149,7 @@ CITY=Jilin DAY=0925 TASK_LIMIT=100 DRONE_COUNT=10 RAY_NUM_CPUS=10 ./run_ray_sim.
 | `RAY_ADDRESS` | 空 | Ray 集群地址，常用 `auto` |
 | `RAY_NUM_CPUS` | 空 | Ray 本地 runtime 可用 CPU 数 |
 | `KG_BACKEND` | `memory` | 知识图谱后端，支持 `memory` / `neo4j` |
+| `KG_RUN_ID` | 自动生成 | Neo4j 单次实验运行 ID，用于隔离不同 run 的图谱数据 |
 | `NEO4J_URI` | `bolt://127.0.0.1:7687` | Neo4j Bolt 地址 |
 | `NEO4J_USER` | `neo4j` | Neo4j 用户名 |
 | `NEO4J_PASSWORD` | 空 | Neo4j 密码 |

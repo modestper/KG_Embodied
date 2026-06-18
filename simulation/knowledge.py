@@ -115,8 +115,9 @@ class TemporalKnowledgeStore:
 
 
 class Neo4jKnowledgeStore(TemporalKnowledgeStore):
-    def __init__(self, driver=None, uri=None, user=None, password=None, driver_factory=None):
+    def __init__(self, driver=None, uri=None, user=None, password=None, driver_factory=None, run_id=None):
         super().__init__()
+        self.run_id = run_id or f"run-{uuid4()}"
         if driver is not None:
             self.driver = driver
             return
@@ -155,6 +156,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         properties = properties or {}
         event = {
             "id": f"{event_type}-{uuid4()}",
+            "run_id": self.run_id,
             "type": event_type,
             "time_minute": time_minute,
             "time": format_minute(time_minute),
@@ -165,6 +167,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         }
         task_props = {
             "id": task.task_id,
+            "run_id": self.run_id,
             "city": task.city,
             "region_id": task.region_id,
             "release_minute": task.release_minute,
@@ -181,6 +184,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         }
         drone_props = {
             "id": drone.drone_id,
+            "run_id": self.run_id,
             "region_id": drone.region_id,
             "capacity": drone.capacity,
             "speed_m_per_minute": drone.speed_m_per_minute,
@@ -195,18 +199,24 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         }
         region_props = {
             "id": task.region_id,
+            "run_id": self.run_id,
             "city": task.city,
             "depot_x": task.pickup_x,
             "depot_y": task.pickup_y,
         }
+        run_props = {
+            "id": self.run_id,
+        }
         with self.driver.session() as session:
             session.run(
                 """
-                MERGE (r:Region {id: $region_id})
+                MERGE (run:Run {id: $run_id})
+                SET run += $run
+                MERGE (r:Region {id: $region_id, run_id: $run_id})
                 SET r += $region
-                MERGE (d:Drone {id: $drone_id})
+                MERGE (d:Drone {id: $drone_id, run_id: $run_id})
                 SET d += $drone
-                MERGE (t:Task {id: $task_id})
+                MERGE (t:Task {id: $task_id, run_id: $run_id})
                 SET t += $task
                 MERGE (d)-[:HOME_REGION]->(r)
                 MERGE (d)-[:CURRENTLY_IN]->(r)
@@ -216,11 +226,17 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
                 CREATE (e)-[:ABOUT_DRONE]->(d)
                 CREATE (e)-[:ABOUT_TASK]->(t)
                 CREATE (e)-[:IN_REGION]->(r)
+                MERGE (r)-[:IN_RUN]->(run)
+                MERGE (d)-[:IN_RUN]->(run)
+                MERGE (t)-[:IN_RUN]->(run)
+                MERGE (e)-[:IN_RUN]->(run)
                 """,
+                run_id=self.run_id,
                 region_id=task.region_id,
                 drone_id=drone.drone_id,
                 task_id=task.task_id,
                 event_id=event["id"],
+                run=run_props,
                 region=region_props,
                 drone=drone_props,
                 task=task_props,
@@ -229,11 +245,12 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
             if event_type == "task_assigned":
                 session.run(
                     """
-                    MATCH (d:Drone {id: $drone_id}), (t:Task {id: $task_id})
+                    MATCH (d:Drone {id: $drone_id, run_id: $run_id}), (t:Task {id: $task_id, run_id: $run_id})
                     MERGE (d)-[rel:ASSIGNED]->(t)
                     SET rel.time_minute = $time_minute,
                         rel.time = $time
                     """,
+                    run_id=self.run_id,
                     drone_id=drone.drone_id,
                     task_id=task.task_id,
                     time_minute=time_minute,
@@ -242,12 +259,13 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
             elif event_type == "task_completed":
                 session.run(
                     """
-                    MATCH (d:Drone {id: $drone_id}), (t:Task {id: $task_id})
+                    MATCH (d:Drone {id: $drone_id, run_id: $run_id}), (t:Task {id: $task_id, run_id: $run_id})
                     MERGE (d)-[rel:COMPLETED]->(t)
                     SET rel.time_minute = $time_minute,
                         rel.time = $time,
                         rel.late = $late
                     """,
+                    run_id=self.run_id,
                     drone_id=drone.drone_id,
                     task_id=task.task_id,
                     time_minute=time_minute,
@@ -258,7 +276,8 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
     def recent_agent_performance(self, region_id, now_minute, window_minutes):
         start = now_minute - window_minutes
         query = """
-        MATCH (e:Event)-[:IN_REGION]->(:Region {id: $region_id})
+        MATCH (e:Event)-[:IN_RUN]->(:Run {id: $run_id})
+        MATCH (e)-[:IN_REGION]->(:Region {id: $region_id, run_id: $run_id})
         WHERE e.time_minute >= $start AND e.time_minute <= $now
         RETURN e.drone_id AS drone_id,
                sum(CASE WHEN e.type = 'task_assigned' THEN 1 ELSE 0 END) AS assigned,
@@ -266,7 +285,13 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
                sum(CASE WHEN e.type = 'task_completed' AND coalesce(e.late, false) THEN 1 ELSE 0 END) AS late
         """
         with self.driver.session() as session:
-            rows = session.run(query, region_id=region_id, start=start, now=now_minute).data()
+            rows = session.run(
+                query,
+                run_id=self.run_id,
+                region_id=region_id,
+                start=start,
+                now=now_minute,
+            ).data()
         return {
             row["drone_id"]: {
                 "assigned": int(row.get("assigned") or 0),
@@ -280,7 +305,8 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
     def recent_events(self, region_id, now_minute, window_minutes, limit=20):
         start = now_minute - window_minutes
         query = """
-        MATCH (e:Event)-[:IN_REGION]->(:Region {id: $region_id})
+        MATCH (e:Event)-[:IN_RUN]->(:Run {id: $run_id})
+        MATCH (e)-[:IN_REGION]->(:Region {id: $region_id, run_id: $run_id})
         WHERE e.time_minute >= $start AND e.time_minute <= $now
         RETURN e
         ORDER BY e.time_minute DESC
@@ -289,6 +315,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         with self.driver.session() as session:
             rows = session.run(
                 query,
+                run_id=self.run_id,
                 region_id=region_id,
                 start=start,
                 now=now_minute,
@@ -309,4 +336,5 @@ def build_knowledge_store_from_env(driver_factory=None):
         user=os.environ.get("NEO4J_USER", "neo4j"),
         password=os.environ.get("NEO4J_PASSWORD", ""),
         driver_factory=driver_factory,
+        run_id=os.environ.get("KG_RUN_ID"),
     )

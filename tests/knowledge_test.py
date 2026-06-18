@@ -137,28 +137,39 @@ class Neo4jKnowledgeStoreTest(unittest.TestCase):
 
     def test_records_assignment_as_graph_nodes_and_relationships(self):
         driver = FakeNeo4jDriver()
-        kg = Neo4jKnowledgeStore(driver=driver)
+        kg = Neo4jKnowledgeStore(driver=driver, run_id="run-a")
         task = self.make_task()
         drone = DroneAgent("drone-1", 0, 0, region_id="10")
 
         kg.record_assignment(481, task, drone)
 
         joined_queries = "\n".join(query for query, _params in driver.calls)
+        first_params = driver.calls[0][1]
+        self.assertEqual(kg.run_id, "run-a")
+        self.assertIn("MERGE (run:Run", joined_queries)
+        self.assertIn(":IN_RUN", joined_queries)
         self.assertIn("MERGE (d:Drone", joined_queries)
         self.assertIn("MERGE (t:Task", joined_queries)
         self.assertIn("MERGE (r:Region", joined_queries)
         self.assertIn("MERGE (e:Event", joined_queries)
         self.assertIn(":ASSIGNED", joined_queries)
+        self.assertEqual(first_params["run_id"], "run-a")
+        self.assertEqual(first_params["run"]["id"], "run-a")
         self.assertEqual(kg.events[0]["type"], "task_assigned")
 
     def test_query_region_context_uses_neo4j_recent_memory(self):
         driver = FakeNeo4jDriver()
-        kg = Neo4jKnowledgeStore(driver=driver)
+        kg = Neo4jKnowledgeStore(driver=driver, run_id="run-a")
         task = self.make_task()
         drone = DroneAgent("drone-1", 0, 0, region_id="10")
 
         context = kg.query_region_context("10", [task], [drone], now_minute=510)
 
+        query_calls = [call for call in driver.calls if "MATCH (e:Event)" in call[0]]
+        self.assertEqual(len(query_calls), 2)
+        for query, params in query_calls:
+            self.assertIn("(:Run {id: $run_id})", query)
+            self.assertEqual(params["run_id"], "run-a")
         self.assertEqual(context["recent_agent_performance"]["drone-1"]["completed"], 1)
         self.assertEqual(context["recent_events"][0]["type"], "task_completed")
 
@@ -172,12 +183,14 @@ class Neo4jKnowledgeStoreTest(unittest.TestCase):
                 "NEO4J_URI": "bolt://neo4j.example:7687",
                 "NEO4J_USER": "neo4j",
                 "NEO4J_PASSWORD": "secret",
+                "KG_RUN_ID": "experiment-001",
             },
         ):
             kg = build_knowledge_store_from_env(driver_factory=lambda uri, auth: driver)
 
         self.assertIsInstance(kg, Neo4jKnowledgeStore)
         self.assertIs(kg.driver, driver)
+        self.assertEqual(kg.run_id, "experiment-001")
 
 
 if __name__ == "__main__":
