@@ -1,0 +1,1 @@
+{"time":"2026-06-29T10:34:37","name":"run-summary","elapsed_ms":1385.736,"row_count":4,"query":"MATCH (n)-[:IN_RUN]->(:Run {id: $run_id})\n        RETURN labels(n) AS labels, count(n) AS count\n        ORDER BY count DESC","params":{"run_id":"jilin-0925-ray001"},"uri":"bolt://127.0.0.1:17687"}

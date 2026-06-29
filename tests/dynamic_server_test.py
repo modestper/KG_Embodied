@@ -36,6 +36,18 @@ class DynamicServerTest(unittest.TestCase):
         self.assertIn('"time":"08:00:00"', payload)
         self.assertTrue(payload.endswith("\n\n"))
 
+    def test_dynamic_page_exposes_compact_region_boundary_controls(self):
+        html = (run_dynamic_sim.VIEWER_ROOT / "dynamic.html").read_text(encoding="utf-8")
+
+        for control_id in (
+            "regionBoundaryMenu",
+            "regionBoundaryEnabled",
+            "regionBoundaryWidth",
+            "regionBoundaryOpacity",
+            "regionBoundaryColor",
+        ):
+            self.assertIn(f'id="{control_id}"', html)
+
     def test_stream_simulation_emits_init_frame_and_done(self):
         events = list(
             stream_simulation(
@@ -191,6 +203,12 @@ class DynamicServerTest(unittest.TestCase):
             args = parse_args()
 
         self.assertEqual(args.max_steps, 2000)
+
+    def test_parse_args_defaults_to_ray_backend(self):
+        with patch("sys.argv", ["run_dynamic_sim.py"]):
+            args = parse_args()
+
+        self.assertEqual(args.backend, "ray")
 
     def test_dynamic_handler_replaces_active_runtime(self):
         previous = Mock()

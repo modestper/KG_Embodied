@@ -102,7 +102,7 @@ Neo4j KG 会记录任务派单和完成事件，并为 LLM/KG 查询提供 `rece
 http://127.0.0.1:8010/dynamic.html
 ```
 
-动态页面的 `Backend` 默认为“服务默认”：用 `./run_local_sim.sh` 启动时默认是 `local`，用 `./run_ray_sim.sh` 启动时默认是 `ray`。也可以在页面手动选择 `local` 或 `ray` 后点击“应用参数并重启”。
+动态页面的 `Backend` 默认为“服务默认”：直接运行 `scripts/run_dynamic_sim.py` 或用 `./run_ray_sim.sh` 启动时默认是 `ray`；用 `./run_local_sim.sh` 会显式使用 `local`。也可以在页面手动选择 `local` 或 `ray` 后点击“应用参数并重启”。
 
 其他页面：
 

@@ -168,6 +168,27 @@
           <div class="panel-head">
             <h3>实时派送轨迹</h3>
             <div class="panel-tools">
+              <details id="regionBoundaryMenu" class="compact-menu">
+                <summary>边界</summary>
+                <div class="compact-menu-panel" aria-label="区域边界设置">
+                  <label class="checkbox-row mini-control">
+                    <input id="regionBoundaryEnabled" type="checkbox" checked />
+                    显示
+                  </label>
+                  <label class="mini-control">
+                    线宽
+                    <input id="regionBoundaryWidth" type="range" min="0.2" max="3" step="0.1" value="0.8" />
+                  </label>
+                  <label class="mini-control">
+                    深浅
+                    <input id="regionBoundaryOpacity" type="range" min="0.05" max="1" step="0.05" value="0.35" />
+                  </label>
+                  <label class="mini-control color-control">
+                    颜色
+                    <input id="regionBoundaryColor" type="color" value="#26323b" />
+                  </label>
+                </div>
+              </details>
               <button id="zoomOut" type="button" aria-label="缩小地图">-</button>
               <span id="zoomLabel">100%</span>
               <button id="zoomIn" type="button" aria-label="放大地图">+</button>

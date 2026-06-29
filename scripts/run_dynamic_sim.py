@@ -440,7 +440,7 @@ def parse_args():
     parser.add_argument("--vllm-api-base", default=os.environ.get("VLLM_API_BASE", "http://127.0.0.1:6666/v1"))
     parser.add_argument("--vllm-model", default=os.environ.get("VLLM_MODEL", "qwen2.5-7b"))
     parser.add_argument("--llm-max-tokens", type=int, default=int(os.environ.get("LLM_MAX_TOKENS", "512")))
-    parser.add_argument("--backend", choices=["local", "ray"], default="local")
+    parser.add_argument("--backend", choices=["local", "ray"], default="ray")
     parser.add_argument("--ray-address", default=os.environ.get("RAY_ADDRESS", ""))
     parser.add_argument("--ray-num-cpus", type=int, default=None)
     return parser.parse_args()

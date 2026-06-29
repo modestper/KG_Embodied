@@ -28,6 +28,12 @@ const state = {
   panX: 0,
   panY: 0,
   drag: null,
+  regionBoundary: {
+    enabled: true,
+    width: 0.8,
+    opacity: 0.35,
+    color: "#26323b",
+  },
 };
 
 const els = {
@@ -70,6 +76,11 @@ const els = {
   zoomOut: document.querySelector("#zoomOut"),
   zoomReset: document.querySelector("#zoomReset"),
   zoomLabel: document.querySelector("#zoomLabel"),
+  regionBoundaryMenu: document.querySelector("#regionBoundaryMenu"),
+  regionBoundaryEnabled: document.querySelector("#regionBoundaryEnabled"),
+  regionBoundaryWidth: document.querySelector("#regionBoundaryWidth"),
+  regionBoundaryOpacity: document.querySelector("#regionBoundaryOpacity"),
+  regionBoundaryColor: document.querySelector("#regionBoundaryColor"),
   agentCaption: document.querySelector("#agentCaption"),
   agentTable: document.querySelector("#agentTable"),
   taskCaption: document.querySelector("#taskCaption"),
@@ -99,6 +110,10 @@ function bindEvents() {
   els.zoomIn.addEventListener("click", () => setZoom(state.zoom * 1.2));
   els.zoomOut.addEventListener("click", () => setZoom(state.zoom / 1.2));
   els.zoomReset.addEventListener("click", resetView);
+  els.regionBoundaryEnabled.addEventListener("change", updateRegionBoundaryStyle);
+  els.regionBoundaryWidth.addEventListener("input", updateRegionBoundaryStyle);
+  els.regionBoundaryOpacity.addEventListener("input", updateRegionBoundaryStyle);
+  els.regionBoundaryColor.addEventListener("input", updateRegionBoundaryStyle);
   els.canvas.addEventListener("pointerdown", startPan);
   els.canvas.addEventListener("pointermove", movePan);
   els.canvas.addEventListener("pointerup", endPan);
@@ -333,6 +348,21 @@ function clampZoom(value) {
 function presetValue(value) {
   const rounded = Math.round(value);
   return ["1", "5", "20", "50"].includes(String(rounded)) ? String(rounded) : "custom";
+}
+
+function updateRegionBoundaryStyle() {
+  state.regionBoundary = {
+    enabled: els.regionBoundaryEnabled.checked,
+    width: normalizedFloat(els.regionBoundaryWidth.value, 0.8),
+    opacity: normalizedFloat(els.regionBoundaryOpacity.value, 0.35),
+    color: els.regionBoundaryColor.value || "#26323b",
+  };
+  render();
+}
+
+function normalizedFloat(value, fallback) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function renderEmpty() {
@@ -638,16 +668,16 @@ function drawGrid(ctx, width, height) {
 }
 
 function drawRegionOutlines(ctx, project, regions) {
-  if (!regions.length) return;
+  if (!regions.length || !state.regionBoundary.enabled) return;
   ctx.save();
-  ctx.lineWidth = 0.55;
-  ctx.globalAlpha = 0.28;
+  ctx.lineWidth = state.regionBoundary.width;
+  ctx.globalAlpha = state.regionBoundary.opacity;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  for (const [index, region] of regions.entries()) {
+  for (const region of regions) {
     const points = outlinePoints(region);
     if (points.length < 2) continue;
-    ctx.strokeStyle = colors[index % colors.length];
+    ctx.strokeStyle = state.regionBoundary.color;
     drawClosedPath(ctx, points.map(project));
   }
   ctx.restore();
