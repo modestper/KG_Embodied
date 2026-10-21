@@ -1,0 +1,37 @@
+{
+  "run_id": "million-nodes-hangzhou-0621-100agents",
+  "context_count": 2000,
+  "total_queries": 2000,
+  "success_count": 2000,
+  "failure_count": 0,
+  "wall_ms": 2872.195,
+  "throughput_qps": 696.331,
+  "query_avg_ms": 97.426,
+  "query_p50_ms": 82.632,
+  "query_p95_ms": 211.242,
+  "query_p99_ms": 340.481,
+  "context_avg_ms": 97.533,
+  "context_p95_ms": 211.322,
+  "by_query": {
+    "i0": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 97.426,
+      "p95_ms": 211.242,
+      "max_ms": 539.072,
+      "avg_rows": 1.0
+    }
+  },
+  "by_category": {
+    "self": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 97.426,
+      "p95_ms": 211.242,
+      "max_ms": 539.072,
+      "avg_rows": 1.0
+    }
+  }
+}

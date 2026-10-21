@@ -13,6 +13,7 @@ from simulation.delivery_sim import (
     SimulationEnv,
     build_depot,
     build_region_depots,
+    load_fixed_region_depots,
     load_delivery_tasks,
     make_drones,
     make_region_drones,
@@ -80,6 +81,7 @@ def build_trace(
         sample_seed=seed,
     )
     region_depots = build_region_depots(tasks)
+    charging_depots = load_fixed_region_depots(city)
     depot = build_depot(tasks)
     if depot_mode == "region":
         drones = make_region_drones(drone_count, region_depots, capacity=6, seed=seed)
@@ -89,7 +91,13 @@ def build_trace(
     for drone in drones:
         drone.planner = planner
     coordinator = build_coordinator_from_env()
-    env = SimulationEnv(tasks, drones, coordinator, step_minutes=step_seconds / 60)
+    env = SimulationEnv(
+        tasks,
+        drones,
+        coordinator,
+        step_minutes=step_seconds / 60,
+        charging_depots=list(charging_depots.values()),
+    )
     trace = env.run(max_steps=max_steps)
     if frame_stride > 1:
         trace["frames"] = trace["frames"][::frame_stride]
@@ -105,10 +113,11 @@ def build_trace(
         "step_seconds": step_seconds,
         "depot_mode": depot_mode,
         "seed": seed,
-        "region_count": len(region_depots),
+        "region_count": len(charging_depots),
+        "active_region_count": len(region_depots),
         "frame_stride": frame_stride,
     }
-    trace["depots"] = list(region_depots.values())
+    trace["depots"] = list(charging_depots.values())
     return trace
 
 

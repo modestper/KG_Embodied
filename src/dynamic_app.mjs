@@ -1,4 +1,11 @@
 import { buildDynamicRegions, outlinePoints } from "./dynamic_regions.mjs";
+import {
+  assistanceRoleForDrone,
+  assistanceVisuals,
+  frameHasActiveAssistance,
+} from "./dynamic_assistance.mjs";
+import { FrameTimeline } from "./dynamic_timeline.mjs";
+import { initGraphQueryPanel } from "./dynamic_query.mjs";
 
 const colors = ["#1b8a6b", "#2866b6", "#b7791f", "#8a3ffc", "#c43d4b", "#4f6f52"];
 const minZoom = 0.25;
@@ -14,7 +21,8 @@ const state = {
   metrics: null,
   kgEvents: [],
   llmEvents: [],
-  frameBuffer: [],
+  timeline: new FrameTimeline(),
+  timelineScrubbing: false,
   frameIndex: 0,
   stepSeconds: null,
   playing: true,
@@ -24,6 +32,7 @@ const state = {
   wallStartedAt: null,
   wallElapsedMs: 0,
   wallTimer: null,
+  assistancePauseTriggered: false,
   zoom: 1,
   panX: 0,
   panY: 0,
@@ -72,6 +81,9 @@ const els = {
   simTime: document.querySelector("#simTime"),
   wallElapsed: document.querySelector("#wallElapsed"),
   frameCaption: document.querySelector("#frameCaption"),
+  goLive: document.querySelector("#goLive"),
+  timelineProgress: document.querySelector("#timelineProgress"),
+  timelineCaption: document.querySelector("#timelineCaption"),
   zoomIn: document.querySelector("#zoomIn"),
   zoomOut: document.querySelector("#zoomOut"),
   zoomReset: document.querySelector("#zoomReset"),
@@ -94,12 +106,21 @@ const els = {
 
 function init() {
   bindEvents();
+  void initGraphQueryPanel();
   connect();
   renderEmpty();
 }
 
 function bindEvents() {
   els.playPause.addEventListener("click", togglePlayback);
+  els.goLive.addEventListener("click", goToLiveFrame);
+  els.timelineProgress.addEventListener("pointerdown", beginTimelineScrub);
+  els.timelineProgress.addEventListener("input", seekTimeline);
+  els.timelineProgress.addEventListener("pointerup", endTimelineScrub);
+  els.timelineProgress.addEventListener("pointercancel", endTimelineScrub);
+  els.timelineProgress.addEventListener("change", endTimelineScrub);
+  els.timelineProgress.addEventListener("keydown", beginKeyboardTimelineScrub);
+  els.timelineProgress.addEventListener("keyup", endTimelineScrub);
   els.resetRun.addEventListener("click", connect);
   els.reconnect.addEventListener("click", connect);
   els.playSpeed.addEventListener("change", restartPlaybackTimer);
@@ -119,6 +140,8 @@ function bindEvents() {
   els.canvas.addEventListener("pointerup", endPan);
   els.canvas.addEventListener("pointerleave", endPan);
   els.canvas.addEventListener("wheel", zoomAtPointer, { passive: false });
+  window.addEventListener("pointerup", endTimelineScrub);
+  window.addEventListener("pointercancel", endTimelineScrub);
   window.addEventListener("resize", render);
 }
 
@@ -146,20 +169,39 @@ function connect() {
   });
   source.addEventListener("frame", (event) => {
     const payload = JSON.parse(event.data);
-    state.frameBuffer.push(payload);
-    if (state.playing && state.frameBuffer.length === 1) consumeFrame();
+    if (!state.playing) state.timeline.hold();
+    const livePayload = state.timeline.append(payload);
+    if (state.playing && livePayload) {
+      applyFramePayload(livePayload);
+    } else {
+      renderTimeline();
+      renderFrameCaption();
+      renderRunStatus();
+    }
   });
   source.addEventListener("done", (event) => {
     const payload = JSON.parse(event.data);
-    state.metrics = payload.metrics ?? state.metrics;
-    state.kgEvents = payload.kg_events ?? state.kgEvents;
-    state.llmEvents = payload.llm_events ?? state.llmEvents;
     state.streamDone = true;
     state.donePayload = payload;
+    if (state.timeline.followingLive) {
+      applyFinalSummary();
+      state.playing = false;
+      stopPlaybackTimer();
+    }
     stopWallTimer();
     setConnection("done");
     source.close();
     render();
+  });
+  source.addEventListener("superseded", () => {
+    source.close();
+    if (state.source !== source) return;
+    state.playing = false;
+    state.timeline.hold();
+    stopPlaybackTimer();
+    stopWallTimer();
+    setConnection("superseded");
+    renderPlaybackButton();
   });
   source.addEventListener("error", () => {
     if (els.connectionStatus.textContent !== "done") setConnection("reconnecting");
@@ -194,15 +236,30 @@ function normalizedInt(value, fallback) {
 }
 
 function togglePlayback() {
-  state.playing = !state.playing;
-  if (state.playing) restartPlaybackTimer();
-  else stopPlaybackTimer();
+  if (state.streamDone && state.timeline.followingLive) return;
+  if (state.playing) {
+    state.playing = false;
+    state.timeline.hold();
+    stopPlaybackTimer();
+  } else {
+    state.playing = true;
+    if (state.timeline.cursor === state.timeline.lastIndex) {
+      const payload = state.timeline.goLive();
+      if (payload) applyFramePayload(payload, { detectAssistance: false });
+    }
+    restartPlaybackTimer();
+  }
   renderPlaybackButton();
+  renderTimeline();
+  renderRunStatus();
 }
 
 function restartPlaybackTimer() {
   stopPlaybackTimer();
-  if (!state.playing) return;
+  if (!state.playing || state.timeline.followingLive) {
+    renderPlaybackButton();
+    return;
+  }
   state.playbackTimer = window.setInterval(consumeFrame, Number(els.playSpeed.value));
   renderPlaybackButton();
 }
@@ -246,21 +303,104 @@ function formatDuration(milliseconds) {
 }
 
 function consumeFrame() {
-  const payload = state.frameBuffer.shift();
+  const payload = state.timeline.advance();
   if (!payload) {
-    if (state.streamDone) stopPlaybackTimer();
+    if (state.streamDone) {
+      state.playing = false;
+      stopPlaybackTimer();
+      renderPlaybackButton();
+    }
     return;
   }
+  applyFramePayload(payload);
+  if (state.timeline.followingLive) {
+    stopPlaybackTimer();
+    if (state.streamDone) {
+      state.playing = false;
+      renderPlaybackButton();
+      renderTimeline();
+    }
+  }
+}
+
+function seekTimeline() {
+  const payload = state.timeline.seek(Number(els.timelineProgress.value));
+  if (!payload) return;
+  stopPlaybackTimer();
+  if (state.timelineScrubbing) state.timeline.hold();
+  state.playing =
+    state.timeline.followingLive && !state.streamDone && !state.timelineScrubbing;
+  applyFramePayload(payload, { detectAssistance: false });
+}
+
+function beginTimelineScrub() {
+  if (!state.timeline.length) return;
+  state.timelineScrubbing = true;
+  state.playing = false;
+  state.timeline.hold();
+  stopPlaybackTimer();
+  renderPlaybackButton();
+  renderTimeline();
+  renderRunStatus();
+}
+
+function beginKeyboardTimelineScrub(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
+    return;
+  }
+  beginTimelineScrub();
+}
+
+function endTimelineScrub() {
+  if (!state.timelineScrubbing) return;
+  const endedAtRightEdge =
+    Number(els.timelineProgress.value) === Number(els.timelineProgress.max);
+  state.timelineScrubbing = false;
+  if (endedAtRightEdge) {
+    goToLiveFrame();
+    return;
+  }
+  renderTimeline();
+  renderRunStatus();
+}
+
+function goToLiveFrame() {
+  const payload = state.timeline.goLive();
+  if (!payload) return;
+  state.playing = !state.streamDone;
+  stopPlaybackTimer();
+  applyFramePayload(payload, { detectAssistance: false });
+}
+
+function applyFramePayload(payload, { detectAssistance = true } = {}) {
   state.frameIndex = payload.frame_index ?? state.frameIndex + 1;
   state.frame = payload.frame;
   state.metrics = payload.metrics ?? state.metrics;
   state.kgEvents = payload.kg_events ?? state.kgEvents;
   state.llmEvents = payload.llm_events ?? state.llmEvents;
+  if (state.streamDone && state.timeline.followingLive) applyFinalSummary();
+  if (
+    detectAssistance &&
+    !state.assistancePauseTriggered &&
+    frameHasActiveAssistance(state.frame)
+  ) {
+    state.assistancePauseTriggered = true;
+    state.playing = false;
+    state.timeline.hold();
+    stopPlaybackTimer();
+  }
   render();
+}
+
+function applyFinalSummary() {
+  state.metrics = state.donePayload?.metrics ?? state.metrics;
+  state.kgEvents = state.donePayload?.kg_events ?? state.kgEvents;
+  state.llmEvents = state.donePayload?.llm_events ?? state.llmEvents;
 }
 
 function renderPlaybackButton() {
   els.playPause.textContent = state.playing ? "暂停" : "播放";
+  els.playPause.disabled = state.streamDone && state.timeline.followingLive;
 }
 
 function resetRuntime() {
@@ -272,13 +412,15 @@ function resetRuntime() {
   state.metrics = null;
   state.kgEvents = [];
   state.llmEvents = [];
-  state.frameBuffer = [];
+  state.timeline.reset();
+  state.timelineScrubbing = false;
   state.frameIndex = 0;
   state.stepSeconds = null;
   state.streamDone = false;
   state.donePayload = null;
   state.wallStartedAt = null;
   state.wallElapsedMs = 0;
+  state.assistancePauseTriggered = false;
   renderEmpty();
 }
 
@@ -373,7 +515,8 @@ function renderEmpty() {
   els.lateTasks.textContent = "-";
   els.simTime.textContent = "-";
   renderWallElapsed();
-  els.frameCaption.textContent = "frame 0";
+  renderFrameCaption();
+  renderTimeline();
   els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
   renderPlaybackButton();
   els.agentCaption.textContent = "-";
@@ -407,7 +550,8 @@ function render() {
   els.idleDroneCount.textContent = `当前空闲 ${idleDrones}`;
   els.lateTasks.textContent = String(metrics.late_tasks ?? 0);
   els.simTime.textContent = state.frame?.time_label ?? "-";
-  els.frameCaption.textContent = `frame ${state.frameIndex} · ${state.stepSeconds ?? "-"}s/step · buffer ${state.frameBuffer.length}`;
+  renderFrameCaption();
+  renderTimeline();
   els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
   els.runCaption.textContent = `${state.config.city} ${state.config.day} · ${state.config.task_limit} tasks · ${state.config.drone_count} agents`;
   els.scenarioCaption.textContent = [
@@ -426,7 +570,43 @@ function render() {
   renderEvents();
   renderLlmEvents();
   renderRunStatus();
+  renderPlaybackButton();
   renderCanvas();
+}
+
+function renderFrameCaption() {
+  if (!state.timeline.length) {
+    els.frameCaption.textContent = "frame 0";
+    return;
+  }
+  els.frameCaption.textContent = `frame ${state.frameIndex} · ${state.stepSeconds ?? "-"}s/step · 待显示 ${state.timeline.pending}`;
+}
+
+function renderTimeline() {
+  const timeline = state.timeline;
+  const hasFrames = timeline.length > 0;
+  els.timelineProgress.disabled = !hasFrames;
+  els.goLive.disabled = !hasFrames;
+  if (!state.timelineScrubbing) {
+    els.timelineProgress.max = String(Math.max(0, timeline.lastIndex));
+    els.timelineProgress.value = String(Math.max(0, timeline.cursor));
+  }
+  els.goLive.dataset.active = String(hasFrames && timeline.followingLive);
+  els.goLive.textContent = state.streamDone && timeline.followingLive ? "末帧" : "实时";
+  if (!hasFrames) {
+    els.timelineCaption.textContent = "等待首个仿真帧";
+    return;
+  }
+
+  const currentFrame = timeline.current?.frame_index ?? state.frameIndex;
+  const latestFrame = timeline.frames[timeline.lastIndex]?.frame_index ?? currentFrame;
+  const timeLabel = timeline.current?.frame?.time_label ?? "-";
+  const mode = timeline.followingLive
+    ? state.streamDone
+      ? "已结束"
+      : "实时"
+    : "回看";
+  els.timelineCaption.textContent = `frame ${currentFrame}/${latestFrame} · ${timeLabel} · ${mode}`;
 }
 
 function renderRunStatus() {
@@ -434,19 +614,21 @@ function renderRunStatus() {
   const total = state.metrics?.total_tasks ?? state.tasks.length;
   const unfinished = state.metrics?.unfinished_tasks ?? Math.max(0, total - completed);
 
+  if (state.timeline.length && !state.timeline.followingLive) {
+    const latestFrame = state.timeline.frames[state.timeline.lastIndex]?.frame_index ?? "-";
+    const title = state.timeline.cursor === state.timeline.lastIndex ? "画面已暂停" : "历史回看";
+    els.runStatus.dataset.status = "reviewing";
+    els.runStatusTitle.textContent = title;
+    els.runStatusDetail.textContent = `当前 frame ${state.frameIndex}，后台已接收至 frame ${latestFrame}`;
+    return;
+  }
+
   if (!state.donePayload) {
     els.runStatus.dataset.status = "running";
     els.runStatusTitle.textContent = state.config ? "仿真运行中" : "等待仿真初始化";
     els.runStatusDetail.textContent = state.config
       ? `已完成 ${completed}/${total}，其中迟到完成 ${state.metrics?.late_tasks ?? 0}`
       : "等待实时帧数据";
-    return;
-  }
-
-  if (state.frameBuffer.length > 0) {
-    els.runStatus.dataset.status = "buffering";
-    els.runStatusTitle.textContent = "服务端仿真已结束，正在播放缓冲帧";
-    els.runStatusDetail.textContent = `缓冲区剩余 ${state.frameBuffer.length} 帧，最终完成 ${completed}/${total}`;
     return;
   }
 
@@ -472,20 +654,49 @@ function rayConfigLabel(config) {
 
 function renderAgentTable() {
   const drones = state.frame?.drones ?? [];
+  const taskStates = state.frame?.task_states ?? {};
   els.agentTable.innerHTML = drones
     .map(
-      (drone) => `
-        <tr>
+      (drone) => {
+        const role = assistanceRoleForDrone(drone, taskStates);
+        const rowClass = role ? assistanceVisuals[role].rowClass : "";
+        return `
+        <tr class="${rowClass}">
           <td>${drone.id}</td>
           <td>${drone.status}</td>
+          <td>${formatTakeover(drone)}</td>
           <td>${drone.region_id ?? "-"}</td>
           <td>${drone.queue.length}</td>
+          <td>${formatOnboard(drone)}</td>
+          <td>${formatBattery(drone)}</td>
           <td>${drone.completed}</td>
           <td>${Math.round(drone.distance_m).toLocaleString()} m</td>
         </tr>
-      `,
+      `;
+      },
     )
     .join("");
+}
+
+function formatOnboard(drone) {
+  const onboard = drone.onboard_count ?? drone.onboard?.length ?? 0;
+  const capacity = drone.cargo_capacity ?? 3;
+  return `${onboard}/${capacity}`;
+}
+
+function formatBattery(drone) {
+  const remaining = Number(drone.battery_remaining_m);
+  const capacity = Number(drone.battery_capacity_m);
+  if (!Number.isFinite(remaining) || !Number.isFinite(capacity) || capacity <= 0) return "-";
+  return `${(remaining / 1000).toFixed(1)} / ${(capacity / 1000).toFixed(0)} km`;
+}
+
+function formatTakeover(drone) {
+  if (drone.failure_mode) return `故障:${drone.failure_mode}`;
+  if (drone.takeover_mode === "requesting_help") return "求助中";
+  if (drone.takeover_mode === "assisting") return "支援中";
+  if (drone.takeover_mode === "assisted") return "已获助";
+  return "-";
 }
 
 function renderTaskTable() {
@@ -507,6 +718,7 @@ function renderTaskTable() {
           <td>${formatMinuteValue(task.release)}</td>
           <td>${formatMinuteValue(task.deadline)}</td>
           <td>${taskStatusLabel(taskState)}</td>
+          <td>${taskAssistanceLabel(taskState)}</td>
           <td>${taskState.assigned_to ?? "-"}</td>
           <td>${formatMinuteValue(taskState.completed_at)}</td>
           <td>${taskTimelinessLabel(taskState)}</td>
@@ -518,9 +730,20 @@ function renderTaskTable() {
 
 function taskStatusLabel(taskState) {
   if (taskState.status === "completed") return "已完成";
-  if (taskState.status === "assigned" && taskState.picked_up) return "配送中";
+  if (taskState.handover_from_drone_id && !taskState.picked_up) return "前往交接";
+  if (taskState.handover_from_drone_id && taskState.picked_up) return "接管配送";
+  if (taskState.status === "picked_up" || taskState.picked_up) return "配送中";
   if (taskState.status === "assigned") return "前往取货";
   return "等待派单";
+}
+
+function taskAssistanceLabel(taskState) {
+  const labels = {
+    failure: "故障接管",
+    low_battery: "低电接管",
+    deadline_risk: "时效支援",
+  };
+  return labels[taskState.assistance_reason] ?? "-";
 }
 
 function taskTimelinessLabel(taskState) {
@@ -589,6 +812,10 @@ function formatEvent(event) {
     event.time_label ?? event.time_minute,
     event.region_id ? `R${event.region_id}` : null,
     event.task_id ? `task ${event.task_id}` : null,
+    event.source_drone_id && event.helper_drone_id
+      ? `${event.source_drone_id} → ${event.helper_drone_id}`
+      : null,
+    event.reason ?? null,
     event.drone_id ?? null,
   ].filter(Boolean);
   return parts.join(" · ");
@@ -787,10 +1014,9 @@ function drawRoutes(ctx, project, frame) {
 function drawDrones(ctx, project, frame) {
   for (const [index, drone] of frame.drones.entries()) {
     const point = project(drone);
+    const role = assistanceRoleForDrone(drone, frame.task_states);
     ctx.save();
     ctx.fillStyle = colors[index % colors.length];
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(point.x, point.y - 9);
     ctx.lineTo(point.x + 9, point.y + 8);
@@ -798,7 +1024,16 @@ function drawDrones(ctx, project, frame) {
     ctx.lineTo(point.x - 9, point.y + 8);
     ctx.closePath();
     ctx.fill();
-    ctx.stroke();
+    if (role) {
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = assistanceVisuals[role].borderColor;
+      ctx.lineWidth = 9;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
     if (state.zoom >= 1.5) {
       ctx.font = "600 11px sans-serif";
       ctx.fillStyle = "#20242a";
@@ -812,7 +1047,7 @@ function drawLegend(ctx, width, height) {
   ctx.save();
   ctx.fillStyle = "rgba(255,255,255,0.94)";
   ctx.strokeStyle = "#d7dde3";
-  roundRect(ctx, 18, height - 74, 250, 54, 6);
+  roundRect(ctx, 18, height - 98, 330, 78, 6);
   ctx.fill();
   ctx.stroke();
   const items = [
@@ -823,18 +1058,37 @@ function drawLegend(ctx, width, height) {
   ];
   ctx.font = "12px sans-serif";
   for (const [index, [color, label]] of items.entries()) {
-    const x = 32 + index * 58;
+    const x = 32 + index * 74;
     ctx.fillStyle = color;
     ctx.beginPath();
     if (label === "depot") {
-      ctx.rect(x - 4, height - 54, 8, 8);
+      ctx.rect(x - 4, height - 78, 8, 8);
       ctx.fill();
     } else {
-      ctx.arc(x, height - 50, 4, 0, Math.PI * 2);
+      ctx.arc(x, height - 74, 4, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.fillStyle = "#3e4650";
-    ctx.fillText(label, x - 12, height - 31);
+    ctx.fillText(label, x - 12, height - 55);
+  }
+  const assistanceItems = [
+    [assistanceVisuals.requester.borderColor, assistanceVisuals.requester.label],
+    [assistanceVisuals.helper.borderColor, assistanceVisuals.helper.label],
+  ];
+  for (const [index, [color, label]] of assistanceItems.entries()) {
+    const x = 32 + index * 148;
+    const y = height - 34;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 7);
+    ctx.lineTo(x + 7, y + 6);
+    ctx.lineTo(x, y + 3);
+    ctx.lineTo(x - 7, y + 6);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = "#3e4650";
+    ctx.fillText(label, x + 13, y + 4);
   }
   ctx.restore();
 }

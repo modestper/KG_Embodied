@@ -1,0 +1,54 @@
+索引优化前的：
+LaDe LLM 前置上下文查询结果
+==========================
+run_id: million-nodes-hangzhou-0621-100agents
+context 数: 2000
+总查询数: 24000
+成功: 22000
+失败: 2000
+总耗时: 441252.350 ms
+吞吐: 54.391 qps
+单查询 avg/p95/p99: 1978.124 / 6787.259 / 10372.383 ms
+单 context avg/p95: 21775.865 / 36158.139 ms
+按查询统计
+i0: total=2000 success=2000 avg=11.084ms p95=31.481ms rows_avg=1.0
+i1: total=2000 success=2000 avg=2473.409ms p95=4873.913ms rows_avg=1.0
+i2: total=2000 success=0 avg=Nonems p95=Nonems rows_avg=None
+i3: total=2000 success=2000 avg=33.818ms p95=54.574ms rows_avg=8.0
+i4: total=2000 success=2000 avg=247.928ms p95=610.426ms rows_avg=8.8
+i5: total=2000 success=2000 avg=240.143ms p95=610.538ms rows_avg=1.0
+i6: total=2000 success=2000 avg=5545.093ms p95=10578.447ms rows_avg=1.24
+i7: total=2000 success=2000 avg=5288.977ms p95=10487.208ms rows_avg=1.0
+i8: total=2000 success=2000 avg=2361.838ms p95=4710.458ms rows_avg=5.08
+i9: total=2000 success=2000 avg=73.611ms p95=199.671ms rows_avg=1.0
+i10: total=2000 success=2000 avg=2482.404ms p95=5118.149ms rows_avg=7.68
+i11: total=2000 success=2000 avg=3001.058ms p95=6147.51ms rows_avg=10.0
+
+
+
+索引优化后的：
+LaDe LLM 前置上下文查询结果
+==========================
+run_id: million-nodes-hangzhou-0621-100agents
+context 数: 2000
+总查询数: 24000
+成功: 22000
+失败: 2000
+总耗时: 33241.644 ms
+吞吐: 721.986 qps
+单查询 avg/p95/p99: 138.901 / 316.436 / 407.836 ms
+单 context avg/p95: 1605.061 / 1981.54 ms
+
+按查询统计
+i0: total=2000 success=2000 avg=66.642ms p95=130.914ms rows_avg=1.0
+i1: total=2000 success=2000 avg=64.19ms p95=126.183ms rows_avg=1.0
+i2: total=2000 success=0 avg=Nonems p95=Nonems rows_avg=None
+i3: total=2000 success=2000 avg=198.137ms p95=406.876ms rows_avg=8.0
+i4: total=2000 success=2000 avg=255.814ms p95=382.994ms rows_avg=8.8
+i5: total=2000 success=2000 avg=136.512ms p95=195.739ms rows_avg=1.0
+i6: total=2000 success=2000 avg=68.057ms p95=132.227ms rows_avg=1.24
+i7: total=2000 success=2000 avg=63.369ms p95=120.365ms rows_avg=1.0
+i8: total=2000 success=2000 avg=153.348ms p95=305.629ms rows_avg=5.08
+i9: total=2000 success=2000 avg=76.271ms p95=129.929ms rows_avg=1.0
+i10: total=2000 success=2000 avg=234.588ms p95=366.884ms rows_avg=7.68
+i11: total=2000 success=2000 avg=210.988ms p95=337.121ms rows_avg=10.0

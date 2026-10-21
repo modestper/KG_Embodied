@@ -1,0 +1,179 @@
+{
+  "observed_at": "2026-09-15 15:24:41",
+  "source_run_id": "million-nodes-hangzhou-0621-100agents",
+  "drone_count": 100,
+  "cases": [
+    {
+      "max_workers": 1,
+      "pool_size": 100,
+      "database": null,
+      "logging": false,
+      "summary": {
+        "run_id": "million-nodes-hangzhou-0621-100agents",
+        "context_count": 2000,
+        "total_queries": 2000,
+        "success_count": 2000,
+        "failure_count": 0,
+        "wall_ms": 1626.996,
+        "throughput_qps": 1229.259,
+        "query_avg_ms": 0.757,
+        "query_p50_ms": 0.717,
+        "query_p95_ms": 0.956,
+        "query_p99_ms": 1.153,
+        "context_avg_ms": 0.797,
+        "context_p95_ms": 0.997,
+        "by_query": {
+          "i0": {
+            "total_queries": 2000,
+            "success_count": 2000,
+            "failure_count": 0,
+            "avg_ms": 0.757,
+            "p95_ms": 0.956,
+            "max_ms": 25.432,
+            "avg_rows": 1.0
+          }
+        },
+        "by_category": {
+          "self": {
+            "total_queries": 2000,
+            "success_count": 2000,
+            "failure_count": 0,
+            "avg_ms": 0.757,
+            "p95_ms": 0.956,
+            "max_ms": 25.432,
+            "avg_rows": 1.0
+          }
+        }
+      }
+    },
+    {
+      "max_workers": 10,
+      "pool_size": 100,
+      "database": null,
+      "logging": false,
+      "summary": {
+        "run_id": "million-nodes-hangzhou-0621-100agents",
+        "context_count": 2000,
+        "total_queries": 2000,
+        "success_count": 2000,
+        "failure_count": 0,
+        "wall_ms": 2377.606,
+        "throughput_qps": 841.182,
+        "query_avg_ms": 11.705,
+        "query_p50_ms": 10.623,
+        "query_p95_ms": 21.392,
+        "query_p99_ms": 31.115,
+        "context_avg_ms": 11.808,
+        "context_p95_ms": 21.479,
+        "by_query": {
+          "i0": {
+            "total_queries": 2000,
+            "success_count": 2000,
+            "failure_count": 0,
+            "avg_ms": 11.705,
+            "p95_ms": 21.392,
+            "max_ms": 66.328,
+            "avg_rows": 1.0
+          }
+        },
+        "by_category": {
+          "self": {
+            "total_queries": 2000,
+            "success_count": 2000,
+            "failure_count": 0,
+            "avg_ms": 11.705,
+            "p95_ms": 21.392,
+            "max_ms": 66.328,
+            "avg_rows": 1.0
+          }
+        }
+      }
+    },
+    {
+      "max_workers": 100,
+      "pool_size": 100,
+      "database": null,
+      "logging": false,
+      "summary": {
+        "run_id": "million-nodes-hangzhou-0621-100agents",
+        "context_count": 2000,
+        "total_queries": 2000,
+        "success_count": 2000,
+        "failure_count": 0,
+        "wall_ms": 2591.849,
+        "throughput_qps": 771.65,
+        "query_avg_ms": 95.163,
+        "query_p50_ms": 79.389,
+        "query_p95_ms": 211.859,
+        "query_p99_ms": 355.924,
+        "context_avg_ms": 95.277,
+        "context_p95_ms": 211.951,
+        "by_query": {
+          "i0": {
+            "total_queries": 2000,
+            "success_count": 2000,
+            "failure_count": 0,
+            "avg_ms": 95.163,
+            "p95_ms": 211.859,
+            "max_ms": 537.788,
+            "avg_rows": 1.0
+          }
+        },
+        "by_category": {
+          "self": {
+            "total_queries": 2000,
+            "success_count": 2000,
+            "failure_count": 0,
+            "avg_ms": 95.163,
+            "p95_ms": 211.859,
+            "max_ms": 537.788,
+            "avg_rows": 1.0
+          }
+        }
+      }
+    },
+    {
+      "max_workers": 1,
+      "pool_size": 100,
+      "database": null,
+      "logging": false,
+      "summary": {
+        "run_id": "million-nodes-hangzhou-0621-100agents",
+        "context_count": 2000,
+        "total_queries": 2000,
+        "success_count": 2000,
+        "failure_count": 0,
+        "wall_ms": 1639.634,
+        "throughput_qps": 1219.785,
+        "query_avg_ms": 0.757,
+        "query_p50_ms": 0.71,
+        "query_p95_ms": 0.996,
+        "query_p99_ms": 1.218,
+        "context_avg_ms": 0.798,
+        "context_p95_ms": 1.035,
+        "by_query": {
+          "i0": {
+            "total_queries": 2000,
+            "success_count": 2000,
+            "failure_count": 0,
+            "avg_ms": 0.757,
+            "p95_ms": 0.996,
+            "max_ms": 22.461,
+            "avg_rows": 1.0
+          }
+        },
+        "by_category": {
+          "self": {
+            "total_queries": 2000,
+            "success_count": 2000,
+            "failure_count": 0,
+            "avg_ms": 0.757,
+            "p95_ms": 0.996,
+            "max_ms": 22.461,
+            "avg_rows": 1.0
+          }
+        }
+      }
+    }
+  ]
+}

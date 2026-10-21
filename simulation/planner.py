@@ -10,13 +10,19 @@ from simulation.delivery_sim import euclidean, format_minute
 
 class RuleBasedPlanner:
     def estimate_cost(self, drone, task, now_minute):
+        if hasattr(drone, "can_accept_task") and not drone.can_accept_task(task):
+            return 1_000_000_000
         queue_penalty = len(drone.queue) * 1500
         pickup_distance = euclidean(drone.position, task.pickup_position)
         delivery_distance = euclidean(task.pickup_position, task.dropoff_position)
         distance = pickup_distance + delivery_distance
         lateness_risk = max(0, now_minute + distance / drone.speed_m_per_minute - task.deadline_minute) * 250
         region_penalty = 0 if drone.region_id in (None, task.region_id) else 25_000
-        battery_risk = 10_000 if drone.total_distance_m + distance > drone.battery_range_m else 0
+        battery_risk = 0
+        if hasattr(drone, "required_battery_for"):
+            battery_risk = max(0, drone.required_battery_for(task) - drone.battery_remaining_m) * 10
+        elif drone.total_distance_m + distance > drone.battery_range_m:
+            battery_risk = 10_000
         return distance + queue_penalty + lateness_risk + region_penalty + battery_risk
 
 
@@ -275,10 +281,12 @@ class RegionLLMCoordinator:
         for decision in decisions:
             task = task_by_id.get(str(decision.get("task_id")))
             drone = drone_by_id.get(str(decision.get("drone_id")))
-            if not task or not drone or not drone.can_accept():
+            if not task or not drone:
                 continue
-            drone.assign(task)
-            assignments[task.task_id] = drone.drone_id
+            if hasattr(drone, "can_accept_task") and not drone.can_accept_task(task):
+                continue
+            if drone.assign(task):
+                assignments[task.task_id] = drone.drone_id
         return assignments
 
     def _request(self, payload):

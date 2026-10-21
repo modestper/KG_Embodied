@@ -1,0 +1,82 @@
+{
+  "run_id": "hangzhou-0621-headless-002",
+  "context_count": 2000,
+  "total_queries": 8000,
+  "success_count": 8000,
+  "failure_count": 0,
+  "wall_ms": 11853.28,
+  "throughput_qps": 674.919,
+  "query_avg_ms": 137.977,
+  "query_p50_ms": 116.52,
+  "query_p95_ms": 312.91,
+  "query_p99_ms": 441.433,
+  "context_avg_ms": 552.147,
+  "context_p95_ms": 872.655,
+  "by_query": {
+    "i0": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 99.35,
+      "p95_ms": 211.402,
+      "max_ms": 641.875,
+      "avg_rows": 1.0
+    },
+    "i3": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 150.507,
+      "p95_ms": 309.279,
+      "max_ms": 669.508,
+      "avg_rows": 3.65
+    },
+    "i4": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 198.261,
+      "p95_ms": 400.807,
+      "max_ms": 906.69,
+      "avg_rows": 5.5
+    },
+    "i5": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 103.79,
+      "p95_ms": 195.795,
+      "max_ms": 637.313,
+      "avg_rows": 1.0
+    }
+  },
+  "by_category": {
+    "event": {
+      "total_queries": 4000,
+      "success_count": 4000,
+      "failure_count": 0,
+      "avg_ms": 151.025,
+      "p95_ms": 342.151,
+      "max_ms": 906.69,
+      "avg_rows": 3.25
+    },
+    "self": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 99.35,
+      "p95_ms": 211.402,
+      "max_ms": 641.875,
+      "avg_rows": 1.0
+    },
+    "task": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 150.507,
+      "p95_ms": 309.279,
+      "max_ms": 669.508,
+      "avg_rows": 3.65
+    }
+  }
+}

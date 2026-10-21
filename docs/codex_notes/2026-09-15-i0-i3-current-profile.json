@@ -1,0 +1,249 @@
+{
+  "observed_at": "2026-09-15 11:28:14",
+  "params": {
+    "run_id": "million-nodes-hangzhou-0621-100agents",
+    "drone_id": "drone-1",
+    "step_index": 2300,
+    "start_step": 2281,
+    "limit": 10,
+    "deadline_horizon_minutes": 60.0,
+    "time_minute": 634.0000000000523,
+    "start_time": 604.0000000000523
+  },
+  "queries": {
+    "i0": {
+      "historical_operators_identical": true,
+      "profile_client_ms": 26.183863170444965,
+      "rows": 1,
+      "operators": [
+        {
+          "operator": "NodeByLabelScan@neo4j",
+          "details": "d:Drone",
+          "rows": 56,
+          "db_hits": 57,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Filter@neo4j",
+          "details": "(d.run_id = $run_id AND cache[d.id] = $drone_id)",
+          "rows": 1,
+          "db_hits": 58,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Limit@neo4j",
+          "details": "1",
+          "rows": 1,
+          "db_hits": 0,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "CacheProperties@neo4j",
+          "details": "cache[d.x], cache[d.queue_len], cache[d.region_id], cache[d.total_distance_m], cache[d.updated_at], cache[d.y], cache[d.status], cache[d.battery_remaining_m], cache[d.onboard_count]",
+          "rows": 1,
+          "db_hits": 9,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Projection@neo4j",
+          "details": "cache[d.region_id] AS region_id, cache[d.total_distance_m] AS total_distance_m, cache[d.battery_remaining_m] AS battery_remaining_m, cache[d.onboard_count] AS onboard_count, cache[d.y] AS y, cache[d.updated_at] AS updated_at, cache[d.status] AS status, cache[d.queue_len] AS queue_len, cache[d.id] AS drone_id, cache[d.x] AS x",
+          "rows": 1,
+          "db_hits": 0,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "ProduceResults@neo4j",
+          "details": "drone_id, status, region_id, x, y, queue_len, onboard_count, battery_remaining_m, total_distance_m, updated_at",
+          "rows": 1,
+          "db_hits": 0,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        }
+      ],
+      "total_db_hits": 124,
+      "serial_warmup_samples": 2,
+      "serial_samples_ms": [
+        0.640292651951313,
+        0.6043510511517525,
+        1.2281229719519615,
+        0.6658937782049179,
+        0.6254315376281738,
+        0.8042585104703903,
+        0.6588129326701164,
+        0.6492231041193008,
+        0.6964132189750671,
+        0.6351927295327187
+      ],
+      "serial_avg_ms": 0.7207992486655712
+    },
+    "i3": {
+      "historical_operators_identical": true,
+      "profile_client_ms": 372.70603608340025,
+      "rows": 10,
+      "operators": [
+        {
+          "operator": "NodeByLabelScan@neo4j",
+          "details": "d:Drone",
+          "rows": 757,
+          "db_hits": 758,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Filter@neo4j",
+          "details": "(d.run_id = $run_id AND d.id = $drone_id)",
+          "rows": 1,
+          "db_hits": 857,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Expand(All)@neo4j",
+          "details": "(d)-[rel:ASSIGNED|CARRYING]->(t)",
+          "rows": 265,
+          "db_hits": 274,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Filter@neo4j",
+          "details": "t.run_id = $run_id AND NOT coalesce(cache[t.status], $autostring_0) = $autostring_1 AND t:Task",
+          "rows": 157,
+          "db_hits": 687,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "CacheProperties@neo4j",
+          "details": "cache[rel.time_minute], cache[rel.pickup_time_minute]",
+          "rows": 157,
+          "db_hits": 314,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "EagerAggregation@neo4j",
+          "details": "t, collect_distinct(type(rel)) AS relation_types, min(coalesce(cache[rel.time_minute], cache[rel.pickup_time_minute], cache[t.release_minute])) AS relation_time_minute",
+          "rows": 151,
+          "db_hits": 157,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Projection@neo4j",
+          "details": "t.deadline_minute AS deadline_minute",
+          "rows": 151,
+          "db_hits": 151,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Top@neo4j",
+          "details": "deadline_minute ASC, relation_time_minute ASC LIMIT $limit",
+          "rows": 10,
+          "db_hits": 0,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "CacheProperties@neo4j",
+          "details": "cache[t.pickup_x], cache[t.region_id], cache[t.pickup_y], cache[t.dropoff_x], cache[t.id], cache[t.dropoff_y], cache[t.status], cache[t.late], cache[t.release_minute]",
+          "rows": 10,
+          "db_hits": 90,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "Projection@neo4j",
+          "details": "cache[t.region_id] AS region_id, cache[t.pickup_x] AS pickup_x, cache[t.late] AS late, cache[t.release_minute] AS release_minute, cache[t.pickup_y] AS pickup_y, cache[t.dropoff_x] AS dropoff_x, cache[t.dropoff_y] AS dropoff_y, cache[t.id] AS task_id, cache[t.status] AS task_status",
+          "rows": 10,
+          "db_hits": 0,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        },
+        {
+          "operator": "ProduceResults@neo4j",
+          "details": "task_id, task_status, region_id, release_minute, deadline_minute, pickup_x, pickup_y, dropoff_x, dropoff_y, late, relation_types, relation_time_minute",
+          "rows": 10,
+          "db_hits": 0,
+          "page_cache_hits": 0,
+          "page_cache_misses": 0
+        }
+      ],
+      "total_db_hits": 3288,
+      "serial_warmup_samples": 2,
+      "serial_samples_ms": [
+        4.384005442261696,
+        4.315333440899849,
+        4.237771034240723,
+        4.221799783408642,
+        4.2502423748373985,
+        3.5712169483304024,
+        3.3750496804714203,
+        3.9815623313188553,
+        3.773394040763378,
+        3.605158068239689
+      ],
+      "serial_avg_ms": 3.9715533144772053
+    }
+  },
+  "indexes": [
+    {
+      "name": "index_1b9dcc97",
+      "state": "ONLINE",
+      "type": "LOOKUP",
+      "labelsOrTypes": null,
+      "properties": null
+    },
+    {
+      "name": "index_460996c0",
+      "state": "ONLINE",
+      "type": "LOOKUP",
+      "labelsOrTypes": null,
+      "properties": null
+    },
+    {
+      "name": "lade_agent_state_run_drone_step",
+      "state": "ONLINE",
+      "type": "RANGE",
+      "labelsOrTypes": [
+        "AgentState"
+      ],
+      "properties": [
+        "run_id",
+        "drone_id",
+        "step_index"
+      ]
+    },
+    {
+      "name": "lade_agent_state_run_region_step",
+      "state": "ONLINE",
+      "type": "RANGE",
+      "labelsOrTypes": [
+        "AgentState"
+      ],
+      "properties": [
+        "run_id",
+        "region_id",
+        "step_index"
+      ]
+    },
+    {
+      "name": "lade_agent_state_run_step",
+      "state": "ONLINE",
+      "type": "RANGE",
+      "labelsOrTypes": [
+        "AgentState"
+      ],
+      "properties": [
+        "run_id",
+        "step_index"
+      ]
+    }
+  ]
+}

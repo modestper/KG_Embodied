@@ -6,11 +6,12 @@
 
 你需要在任务结束前自动生成一个 Markdown 总结文件，保存到：
 
-docs/codex_notes/
+docs/codex_notes/<MM>
 
 文件命名格式：
 
-YYYY-MM-DD-任务关键词.md
+<DD>-任务关键词.md
+这里的 MM 是当前的月份，DD 是当前的日期
 
 ## 总结文件模板
 

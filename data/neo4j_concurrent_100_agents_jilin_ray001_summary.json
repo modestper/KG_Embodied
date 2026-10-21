@@ -1,0 +1,13 @@
+{
+  "total_queries": 100,
+  "success_count": 100,
+  "failure_count": 0,
+  "wall_ms": 607.507,
+  "throughput_qps": 164.607,
+  "min_ms": 429.601,
+  "avg_ms": 541.22,
+  "p50_ms": 541.479,
+  "p95_ms": 584.435,
+  "p99_ms": 591.852,
+  "max_ms": 593.674
+}

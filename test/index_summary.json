@@ -1,0 +1,37 @@
+{
+  "run_id": "hangzhou-0621-headless-002",
+  "context_count": 2000,
+  "total_queries": 2000,
+  "success_count": 2000,
+  "failure_count": 0,
+  "wall_ms": 3609.825,
+  "throughput_qps": 554.043,
+  "query_avg_ms": 166.265,
+  "query_p50_ms": 176.798,
+  "query_p95_ms": 210.345,
+  "query_p99_ms": 341.532,
+  "context_avg_ms": 166.381,
+  "context_p95_ms": 210.449,
+  "by_query": {
+    "i0": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 166.265,
+      "p95_ms": 210.345,
+      "max_ms": 479.238,
+      "avg_rows": 1.0
+    }
+  },
+  "by_category": {
+    "self": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 166.265,
+      "p95_ms": 210.345,
+      "max_ms": 479.238,
+      "avg_rows": 1.0
+    }
+  }
+}

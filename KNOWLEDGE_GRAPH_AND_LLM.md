@@ -99,14 +99,14 @@ aoi_id
 region_id
 ```
 
-然后通过 `build_region_depots()` 为每个区域计算一个 depot：
+`build_region_depots()` 从 `data/fixed_region_depots.json` 读取每个区域的固定 depot。该文件预先使用城市全量订单计算：
 
 ```python
 depot_x = 区域内所有任务目的地 x 的平均值
 depot_y = 区域内所有任务目的地 y 的平均值
 ```
 
-每个任务的 `pickup_x` 和 `pickup_y` 都会被设置为它所属区域的 depot 坐标。因此，当前仿真把任务理解为：
+运行时只选择当前任务涉及的区域，不再根据当前日期、任务上限或随机抽样子集重新计算坐标。每个任务的 `pickup_x` 和 `pickup_y` 都会被设置为它所属区域的固定 depot 坐标。因此，当前仿真把任务理解为：
 
 ```text
 从区域 depot 取货 -> 飞到任务目的地

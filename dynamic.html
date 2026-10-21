@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>实时 Drone 派送仿真</title>
-    <link rel="stylesheet" href="./src/styles.css" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261021-manual-query" />
   </head>
   <body>
     <main class="app sim-app">
@@ -196,7 +196,83 @@
               <span id="frameCaption">frame 0</span>
             </div>
           </div>
+          <div
+            class="timeline"
+            aria-label="仿真时间轴"
+            title="收到仿真帧后，按住滑块拖动可回看历史"
+          >
+            <button
+              id="goLive"
+              class="timeline-live"
+              type="button"
+              title="跳到最新仿真帧"
+              disabled
+            >实时</button>
+            <input
+              id="timelineProgress"
+              type="range"
+              min="0"
+              max="0"
+              step="1"
+              value="0"
+              aria-label="查看已经执行的仿真帧"
+              title="按住并左右拖动查看已执行帧"
+              disabled
+            />
+            <output id="timelineCaption" for="timelineProgress">等待首个仿真帧</output>
+          </div>
           <canvas id="liveCanvas" width="1200" height="720"></canvas>
+        </section>
+
+        <section id="graphQueryPanel" class="panel graph-query-panel" aria-labelledby="graphQueryTitle">
+          <div class="panel-head">
+            <h3 id="graphQueryTitle">知识图谱手动查询</h3>
+            <button id="graphQueryExport" type="button" disabled>导出结果与耗时 JSON</button>
+          </div>
+          <p class="graph-query-note">直接输入只读 Cypher 和 JSON 参数，不调用 LLM，不绑定 i/q 测试集。仅点击执行时查询，仿真每帧更新不会触发查询。</p>
+          <p id="graphQueryTarget" class="graph-query-note">正在读取服务端查询目标…</p>
+          <form id="graphQueryForm" class="graph-query-form">
+            <div class="graph-query-editors">
+              <label for="graphQueryCypher">只读 Cypher
+                <textarea id="graphQueryCypher" rows="7" maxlength="32000" spellcheck="false" required>MATCH (r:Run)
+RETURN r.id AS run_id
+LIMIT $limit</textarea>
+              </label>
+              <label for="graphQueryParams">JSON 参数
+                <textarea id="graphQueryParams" rows="7" spellcheck="false">{"limit": 20}</textarea>
+              </label>
+            </div>
+            <div class="graph-query-controls">
+              <label for="graphQueryMaxRows">最多展示行数
+                <input id="graphQueryMaxRows" type="number" min="1" max="200" step="1" value="100" required />
+              </label>
+              <label for="graphQueryTimeout">事务超时（秒）
+                <input id="graphQueryTimeout" type="number" min="0.1" max="15" step="0.1" value="5" required />
+              </label>
+              <button id="graphQuerySubmit" class="primary-action" type="submit" disabled>执行只读查询</button>
+            </div>
+          </form>
+          <p id="graphQueryStatus" class="graph-query-note" role="status">等待读取配置。</p>
+          <p id="graphQueryError" class="graph-query-error" role="alert"></p>
+          <div class="graph-query-timing">
+            <div><span>数据库报告耗时</span><strong id="graphQueryDbMs">—</strong></div>
+            <div><span>后端查询耗时</span><strong id="graphQueryClientMs">—</strong></div>
+            <div><span>准备与只读校验</span><strong id="graphQueryValidationMs">—</strong></div>
+            <div><span>后端处理总耗时</span><strong id="graphQueryBackendMs">—</strong></div>
+            <div><span>网页请求总耗时</span><strong id="graphQueryBrowserMs">—</strong></div>
+          </div>
+          <p class="graph-query-note">数据库报告值来自 Neo4j summary，并非纯 CPU 时间；后端查询含取回结果，后端总计不含 HTTP 响应序列化；网页请求含 HTTP 和 JSON 解析、不含表格渲染。各项有包含关系，不能直接相加。准备阶段包含 EXPLAIN 校验，可能预热计划缓存。</p>
+          <p class="graph-query-note">同一时刻仅允许一个手动查询。展示上限不限制数据库扫描量，请在 Cypher 中限定 run_id、时间范围和 LIMIT。暂停/回看页面不会冻结数据库，实时读写与原先静态压测不能直接比较。</p>
+          <pre id="graphQueryWarnings" class="graph-query-warnings" aria-label="数据库查询提示"></pre>
+          <div class="table-wrap graph-query-results">
+            <table aria-label="手动查询结果"><thead id="graphQueryHead"></thead><tbody id="graphQueryRows"></tbody></table>
+          </div>
+          <details class="graph-query-history">
+            <summary>本页最近 20 次成功查询的耗时（刷新后清空）</summary>
+            <div class="table-wrap graph-query-results">
+              <table aria-label="查询耗时历史"><thead id="graphQueryHistoryHead"></thead><tbody id="graphQueryHistoryRows"></tbody></table>
+            </div>
+          </details>
         </section>
 
         <section class="panel task-panel">
@@ -214,6 +290,7 @@
                   <th>下发时间</th>
                   <th>截止时间</th>
                   <th>状态</th>
+                  <th>互助</th>
                   <th>Agent</th>
                   <th>完成时间</th>
                   <th>时效</th>
@@ -236,8 +313,11 @@
                   <tr>
                     <th>Agent</th>
                     <th>状态</th>
+                    <th>互助</th>
                     <th>Region</th>
                     <th>队列</th>
+                    <th>载货</th>
+                    <th>电量</th>
                     <th>完成</th>
                     <th>飞行距离</th>
                   </tr>
@@ -275,6 +355,6 @@
       </section>
     </main>
 
-    <script type="module" src="./src/dynamic_app.mjs"></script>
+    <script type="module" src="./src/dynamic_app.mjs?v=20261021-manual-query"></script>
   </body>
 </html>

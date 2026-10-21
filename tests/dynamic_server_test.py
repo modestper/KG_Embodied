@@ -48,6 +48,12 @@ class DynamicServerTest(unittest.TestCase):
         ):
             self.assertIn(f'id="{control_id}"', html)
 
+    def test_dynamic_page_exposes_live_timeline_controls(self):
+        html = (run_dynamic_sim.VIEWER_ROOT / "dynamic.html").read_text(encoding="utf-8")
+
+        for control_id in ("goLive", "timelineProgress", "timelineCaption"):
+            self.assertIn(f'id="{control_id}"', html)
+
     def test_stream_simulation_emits_init_frame_and_done(self):
         events = list(
             stream_simulation(
@@ -175,6 +181,21 @@ class DynamicServerTest(unittest.TestCase):
 
         fake_ray.init.assert_called_once_with(address="auto", num_cpus=4)
 
+    def test_initialize_ray_if_needed_defaults_cpu_count_to_drone_count(self):
+        args = argparse.Namespace(
+            backend="ray",
+            ray_address="",
+            ray_num_cpus=None,
+            drone_count=3,
+        )
+        fake_ray = Mock()
+        fake_ray.is_initialized.return_value = False
+
+        with patch.dict("sys.modules", {"ray": fake_ray}):
+            run_dynamic_sim.initialize_ray_if_needed(args)
+
+        fake_ray.init.assert_called_once_with(num_cpus=3)
+
     def test_initialize_ray_if_needed_restarts_ray_when_request_needs_more_cpus(self):
         args = argparse.Namespace(backend="ray", ray_address="", ray_num_cpus=10)
         fake_ray = Mock()
@@ -219,11 +240,14 @@ class DynamicServerTest(unittest.TestCase):
 
         previous.close.assert_called_once()
         self.assertIs(DynamicHandler.active_env, current)
+        self.assertTrue(DynamicHandler.is_active_env(current))
+        self.assertFalse(DynamicHandler.is_active_env(previous))
 
         DynamicHandler.clear_active_env(current)
 
         current.close.assert_called_once()
         self.assertIsNone(DynamicHandler.active_env)
+        self.assertFalse(DynamicHandler.is_active_env(current))
 
     def test_build_runtime_uses_knowledge_store_from_env(self):
         class CustomKnowledgeStore(TemporalKnowledgeStore):

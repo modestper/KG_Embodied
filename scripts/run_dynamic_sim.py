@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import re
 import sys
@@ -21,12 +22,14 @@ from simulation.delivery_sim import (
     SimulationEnv,
     build_depot,
     build_region_depots,
+    load_fixed_region_depots,
     load_delivery_tasks,
     make_drones,
     make_region_drones,
 )
 from simulation.planner import build_coordinator_from_env, build_planner_from_env
 from simulation.knowledge import build_knowledge_store_from_env
+from simulation.graph_query import GraphQueryError, GraphQueryService, MAX_REQUEST_BYTES
 
 
 def format_sse(event, payload):
@@ -157,6 +160,7 @@ def build_runtime(args):
         sample_seed=args.seed,
     )
     region_depots = build_region_depots(tasks)
+    charging_depots = load_fixed_region_depots(args.city)
     depot = build_depot(tasks)
     if args.depot_mode == "region":
         drones = make_region_drones(args.drone_count, region_depots, capacity=6, seed=args.seed)
@@ -179,6 +183,7 @@ def build_runtime(args):
             knowledge_store=knowledge_store,
             ray_address=args.ray_address or None,
             ray_num_cpus=args.ray_num_cpus,
+            charging_depots=list(charging_depots.values()),
         )
     else:
         env = SimulationEnv(
@@ -187,6 +192,7 @@ def build_runtime(args):
             coordinator,
             step_minutes=args.step_seconds / 60,
             knowledge_store=knowledge_store,
+            charging_depots=list(charging_depots.values()),
         )
     config = {
         "city": tasks[0].city if tasks else args.city,
@@ -196,7 +202,8 @@ def build_runtime(args):
         "coordinator_class": coordinator.__class__.__name__,
         "planner": planner.__class__.__name__,
         "depot_mode": args.depot_mode,
-        "region_count": len(region_depots),
+        "region_count": len(charging_depots),
+        "active_region_count": len(region_depots),
         "llm_enabled": args.use_llm,
         "vllm_api_base": args.vllm_api_base,
         "vllm_model": args.vllm_model,
@@ -210,7 +217,7 @@ def build_runtime(args):
         "ray_num_cpus": args.ray_num_cpus,
     }
     write_run_start(args.llm_log_path, config)
-    return env, config, list(region_depots.values())
+    return env, config, list(charging_depots.values())
 
 
 def make_llm_log_path(args):
@@ -291,6 +298,7 @@ class DynamicHandler(SimpleHTTPRequestHandler):
     runtime_args = None
     active_env = None
     active_env_lock = threading.Lock()
+    query_service = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(VIEWER_ROOT), **kwargs)
@@ -309,13 +317,87 @@ class DynamicHandler(SimpleHTTPRequestHandler):
                 cls.active_env = None
         close_env(env)
 
+    @classmethod
+    def is_active_env(cls, env):
+        with cls.active_env_lock:
+            return cls.active_env is env
+
+    def notify_superseded(self):
+        try:
+            event = format_sse("superseded", {"reason": "new_stream_started"})
+            self.wfile.write(event.encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
     def do_GET(self):
+        if urlparse(self.path).path == "/api/graph-query/config":
+            service = self.query_service
+            if service is None:
+                return self.send_query_json(503, {"ok": False, "error": "查询服务未启动。"})
+            return self.send_query_json(200, service.config())
         if self.path in ("/", "/dynamic"):
             self.path = "/dynamic.html"
             return super().do_GET()
         if self.path.startswith("/events"):
             return self.handle_events()
         return super().do_GET()
+
+    def send_query_json(self, status, payload):
+        body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        if urlparse(self.path).path != "/api/graph-query":
+            return self.send_query_json(404, {"ok": False, "error": "接口不存在。"})
+        try:
+            # No CORS: a foreign site must not submit queries through the viewer.
+            origin = self.headers.get("Origin")
+            if origin:
+                parsed = urlparse(origin)
+                if parsed.scheme not in ("http", "https") or parsed.netloc != self.headers.get("Host"):
+                    raise GraphQueryError("不允许跨站提交查询。", 403, "origin_rejected")
+            if self.headers.get("Sec-Fetch-Site") == "cross-site":
+                raise GraphQueryError("不允许跨站提交查询。", 403, "origin_rejected")
+            if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                raise GraphQueryError("请使用 application/json 提交查询。", 415)
+            if self.headers.get("Transfer-Encoding"):
+                raise GraphQueryError("不支持分块请求体。")
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                raise GraphQueryError("Content-Length 不合法。") from None
+            if not 0 < length <= MAX_REQUEST_BYTES:
+                raise GraphQueryError("请求体为空或超过 64 KiB。", 413)
+            previous_timeout = self.connection.gettimeout()
+            try:
+                self.connection.settimeout(10)
+                body = self.rfile.read(length)
+            except TimeoutError:
+                raise GraphQueryError("读取查询请求超时。", 408, "request_timeout") from None
+            finally:
+                self.connection.settimeout(previous_timeout)
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except (ValueError, UnicodeError, RecursionError):
+                raise GraphQueryError("请求体不是合法的 UTF-8 JSON。") from None
+            if self.query_service is None:
+                raise GraphQueryError("查询服务未启动。", 503)
+            return self.send_query_json(200, self.query_service.execute(payload))
+        except GraphQueryError as error:
+            return self.send_query_json(error.status, {"ok": False, "error": str(error), "code": error.code})
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception:
+            # Do not return tracebacks, credentials or connection URIs to the browser.
+            logging.getLogger(__name__).exception("Manual graph query failed")
+            return self.send_query_json(500, {"ok": False, "error": "查询服务内部错误，请检查服务端日志。"})
 
     def handle_events(self):
         runtime_args = args_from_request(self.runtime_args, self.path)
@@ -332,11 +414,19 @@ class DynamicHandler(SimpleHTTPRequestHandler):
             env, config, depots = build_runtime(runtime_args)
             self.replace_active_env(env)
             for event in stream_simulation(env, config, depots, runtime_args.max_steps, runtime_args.frame_stride):
+                if not self.is_active_env(env):
+                    self.notify_superseded()
+                    return
                 self.wfile.write(event.encode("utf-8"))
                 self.wfile.flush()
                 time.sleep(runtime_args.wall_interval)
         except (BrokenPipeError, ConnectionResetError):
             return
+        except Exception:
+            if env is not None and not self.is_active_env(env):
+                self.notify_superseded()
+                return
+            raise
         finally:
             self.clear_active_env(env)
 
@@ -407,16 +497,17 @@ def initialize_ray_if_needed(args):
         return
     import ray
 
+    requested_cpus = args.ray_num_cpus or getattr(args, "drone_count", None)
     init_kwargs = {}
     if args.ray_address:
         init_kwargs["address"] = args.ray_address
-    if args.ray_num_cpus is not None:
-        init_kwargs["num_cpus"] = args.ray_num_cpus
+    if requested_cpus is not None:
+        init_kwargs["num_cpus"] = requested_cpus
 
     if ray.is_initialized():
         current_cpus = ray.cluster_resources().get("CPU", 0)
-        requested_cpus = args.ray_num_cpus or current_cpus
-        if current_cpus >= requested_cpus:
+        minimum_cpus = requested_cpus or current_cpus
+        if current_cpus >= minimum_cpus:
             return
         ray.shutdown()
     ray.init(**init_kwargs)
@@ -450,9 +541,14 @@ def main():
     args = parse_args()
     DynamicHandler.runtime_args = args
     initialize_ray_if_needed(args)
+    DynamicHandler.query_service = GraphQueryService()
     server = ThreadingHTTPServer((args.host, args.port), DynamicHandler)
     print(f"Dynamic viewer: http://{args.host}:{args.port}/dynamic.html")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        DynamicHandler.query_service.close()
 
 
 if __name__ == "__main__":

@@ -12,7 +12,31 @@ data/delivery_sim*.json
 # Generated LLM call logs and readable exports.
 data/llm_logs/
 
+# Local Neo4j logical backups.
+backups/
+
+# Headless recovery state and detached-process logs.
+data/checkpoints/
+logs/
+
 # Local editor/OS noise
 .DS_Store
 *.swp
 *.swo
+
+
+test_single/
+test_stage/
+test50/
+
+
+/.ray_tmp/
+/data/lade_llm_context_100drones_contexts.jsonl
+
+# Generated query benchmark JSONL exports.
+/test/*.jsonl
+/data/query_store_100drones_contexts.jsonl
+/data/query_store_100drones_query_logs.jsonl
+/data/lade_llm_context_100drones_query_logs.jsonl
+/data/index_contexts.jsonl
+/data/index_query_logs.jsonl

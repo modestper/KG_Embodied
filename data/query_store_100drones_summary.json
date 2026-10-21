@@ -1,0 +1,190 @@
+{
+  "run_id": "million-nodes-hangzhou-0621-100agents",
+  "context_count": 2000,
+  "total_queries": 24000,
+  "success_count": 22000,
+  "failure_count": 2000,
+  "wall_ms": 282565.615,
+  "throughput_qps": 84.936,
+  "query_avg_ms": 1262.377,
+  "query_p50_ms": 1090.245,
+  "query_p95_ms": 3933.0,
+  "query_p99_ms": 5314.419,
+  "context_avg_ms": 13907.001,
+  "context_p95_ms": 18017.097,
+  "by_query": {
+    "i0": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 13.235,
+      "p95_ms": 44.2,
+      "max_ms": 820.172,
+      "avg_rows": 1.0
+    },
+    "i1": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 1543.807,
+      "p95_ms": 2509.204,
+      "max_ms": 3284.82,
+      "avg_rows": 1.0
+    },
+    "i10": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 1495.661,
+      "p95_ms": 2378.022,
+      "max_ms": 3006.311,
+      "avg_rows": 7.68
+    },
+    "i11": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 2039.887,
+      "p95_ms": 3104.669,
+      "max_ms": 4075.517,
+      "avg_rows": 10.0
+    },
+    "i2": {
+      "total_queries": 2000,
+      "success_count": 0,
+      "failure_count": 2000,
+      "avg_ms": null,
+      "p95_ms": null,
+      "max_ms": null,
+      "avg_rows": null
+    },
+    "i3": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 16.171,
+      "p95_ms": 45.111,
+      "max_ms": 341.462,
+      "avg_rows": 8.0
+    },
+    "i4": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 128.9,
+      "p95_ms": 218.411,
+      "max_ms": 1052.412,
+      "avg_rows": 8.8
+    },
+    "i5": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 125.347,
+      "p95_ms": 207.059,
+      "max_ms": 938.216,
+      "avg_rows": 1.0
+    },
+    "i6": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 3607.738,
+      "p95_ms": 5497.107,
+      "max_ms": 6992.527,
+      "avg_rows": 1.24
+    },
+    "i7": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 3479.503,
+      "p95_ms": 5201.581,
+      "max_ms": 6723.052,
+      "avg_rows": 1.0
+    },
+    "i8": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 1399.999,
+      "p95_ms": 2220.672,
+      "max_ms": 2843.679,
+      "avg_rows": 5.08
+    },
+    "i9": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 35.897,
+      "p95_ms": 64.682,
+      "max_ms": 831.439,
+      "avg_rows": 1.0
+    }
+  },
+  "by_category": {
+    "coordination": {
+      "total_queries": 2000,
+      "success_count": 2000,
+      "failure_count": 0,
+      "avg_ms": 3479.503,
+      "p95_ms": 5201.581,
+      "max_ms": 6723.052,
+      "avg_rows": 1.0
+    },
+    "event": {
+      "total_queries": 4000,
+      "success_count": 4000,
+      "failure_count": 0,
+      "avg_ms": 127.124,
+      "p95_ms": 212.36,
+      "max_ms": 1052.412,
+      "avg_rows": 4.9
+    },
+    "global": {
+      "total_queries": 4000,
+      "success_count": 4000,
+      "failure_count": 0,
+      "avg_ms": 1037.892,
+      "p95_ms": 2747.606,
+      "max_ms": 4075.517,
+      "avg_rows": 5.5
+    },
+    "history": {
+      "total_queries": 2000,
+      "success_count": 0,
+      "failure_count": 2000,
+      "avg_ms": null,
+      "p95_ms": null,
+      "max_ms": null,
+      "avg_rows": null
+    },
+    "region": {
+      "total_queries": 4000,
+      "success_count": 4000,
+      "failure_count": 0,
+      "avg_ms": 2551.699,
+      "p95_ms": 4955.835,
+      "max_ms": 6992.527,
+      "avg_rows": 4.46
+    },
+    "self": {
+      "total_queries": 4000,
+      "success_count": 4000,
+      "failure_count": 0,
+      "avg_ms": 778.521,
+      "p95_ms": 2143.425,
+      "max_ms": 3284.82,
+      "avg_rows": 1.0
+    },
+    "task": {
+      "total_queries": 4000,
+      "success_count": 4000,
+      "failure_count": 0,
+      "avg_ms": 708.085,
+      "p95_ms": 1943.976,
+      "max_ms": 2843.679,
+      "avg_rows": 6.54
+    }
+  }
+}
