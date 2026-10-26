@@ -1,7 +1,33 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { FrameTimeline } from "../src/dynamic_timeline.mjs";
+import { FrameTimeline, frameStepIndex } from "../src/dynamic_timeline.mjs";
+
+describe("graph query step index", () => {
+  it("uses graph steps starting at 1 without treating sampled frames as consecutive steps", () => {
+    const timeline = new FrameTimeline();
+    timeline.append({ frame_index: 0 });
+    timeline.append({ frame_index: 5 });
+    assert.equal(frameStepIndex(timeline.current), 6);
+    timeline.seek(0);
+    timeline.append({ frame_index: 10 });
+    assert.equal(frameStepIndex(timeline.current), 1);
+    assert.equal(frameStepIndex(timeline.goLive()), 11);
+  });
+
+  it("accepts an explicit step and leaves unavailable values unknown", () => {
+    assert.equal(frameStepIndex({ step_index: 42, frame_index: 0 }), 42);
+    assert.equal(frameStepIndex({ frame: { step_index: 18 } }), 18);
+    for (const payload of [
+      null,
+      {},
+      { frame_index: -1 },
+      { frame_index: 1.5 },
+    ]) {
+      assert.equal(frameStepIndex(payload), null);
+    }
+  });
+});
 
 describe("dynamic frame timeline", () => {
   it("follows new frames while live", () => {

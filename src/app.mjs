@@ -1,3 +1,5 @@
+import { prepareCanvas, roundRect } from "./canvas_utils.mjs?v=20261021-status-colors";
+import { showPageError } from "./ui.mjs";
 import {
   ALL_CITIES,
   buildCityOptions,
@@ -64,7 +66,9 @@ function currentSummary() {
 
 function render() {
   const summary = currentSummary();
-  els.sourceText.textContent = Object.values(state.dataset.generated_from).join(" / ");
+  els.sourceText.textContent = Object.values(state.dataset.generated_from).join(
+    " / ",
+  );
   els.totalTasks.textContent = formatCount(summary.totalTasks);
   els.totalCouriers.textContent = formatCount(summary.totalCouriers);
   els.totalAoi.textContent = formatCount(summary.totalAoi);
@@ -78,11 +82,18 @@ function render() {
 
 function renderHourly(summary) {
   const max = Math.max(...summary.hourlySeries.map((row) => row.count), 1);
+  const peak = summary.hourlySeries.reduce(
+    (best, row) => (row.count > best.count ? row : best),
+    { hour: 0, count: 0 },
+  );
+  document.querySelector("#hourSummary").textContent = peak.count
+    ? `高峰 ${peak.hour}:00 · ${formatCount(peak.count)} 个任务`
+    : "暂无小时统计";
   els.hourChart.innerHTML = summary.hourlySeries
     .map((row) => {
       const height = Math.max(2, (row.count / max) * 100);
       const label = row.hour % 3 === 0 ? `<span>${row.hour}</span>` : "";
-      return `<div class="bar ${state.taskType}" style="height:${height}%" title="${row.hour}:00 ${formatCount(row.count)}">${label}</div>`;
+      return `<div class="bar ${state.taskType}" style="height:${height}%" tabindex="0" role="img" aria-label="${row.hour} 时，${formatCount(row.count)} 个任务" title="${row.hour}:00 ${formatCount(row.count)}">${label}</div>`;
     })
     .join("");
 }
@@ -110,20 +121,14 @@ function formatMinutes(value) {
 }
 
 function renderMap(summary) {
-  const canvas = els.mapCanvas;
-  const rect = canvas.getBoundingClientRect();
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.max(720, Math.floor(rect.width * ratio));
-  canvas.height = Math.max(420, Math.floor(rect.height * ratio));
+  const { ctx, width, height } = prepareCanvas(els.mapCanvas);
 
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  const width = canvas.width / ratio;
-  const height = canvas.height / ratio;
-  ctx.clearRect(0, 0, width, height);
-
-  const roads = state.dataset.roads.filter((road) => state.city === ALL_CITIES || road.city === state.city);
-  const roadPoints = roads.flatMap((road) => road.points.map(([lng, lat]) => ({ lng, lat })));
+  const roads = state.dataset.roads.filter(
+    (road) => state.city === ALL_CITIES || road.city === state.city,
+  );
+  const roadPoints = roads.flatMap((road) =>
+    road.points.map(([lng, lat]) => ({ lng, lat })),
+  );
   const bounds = getBounds([...roadPoints, ...summary.visibleSamples]);
   if (!bounds) {
     drawEmpty(ctx, width, height);
@@ -196,7 +201,10 @@ function drawCityLabels(ctx, samples, project) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const [city, group] of groups) {
-    const point = project({ lng: group.lng / group.count, lat: group.lat / group.count });
+    const point = project({
+      lng: group.lng / group.count,
+      lat: group.lat / group.count,
+    });
     const label = `${city} ${group.count}`;
     const width = ctx.measureText(label).width + 16;
     ctx.fillStyle = "rgba(255,255,255,0.92)";
@@ -237,18 +245,10 @@ function drawLegend(ctx, sampleColor, width, height) {
   ctx.restore();
 }
 
-function roundRect(ctx, x, y, width, height, radius) {
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.arcTo(x + width, y, x + width, y + height, radius);
-  ctx.arcTo(x + width, y + height, x, y + height, radius);
-  ctx.arcTo(x, y + height, x, y, radius);
-  ctx.arcTo(x, y, x + width, y, radius);
-  ctx.closePath();
-}
-
 function getBounds(points) {
-  const valid = points.filter((point) => Number.isFinite(point.lng) && Number.isFinite(point.lat));
+  const valid = points.filter(
+    (point) => Number.isFinite(point.lng) && Number.isFinite(point.lat),
+  );
   if (!valid.length) return null;
   return valid.reduce(
     (bounds, point) => ({
@@ -271,7 +271,8 @@ function makeProjector(bounds, width, height) {
   const zoomOut = 0.82;
   const xRange = bounds.maxLng - bounds.minLng || 1;
   const yRange = bounds.maxLat - bounds.minLat || 1;
-  const scale = Math.min((width - pad * 2) / xRange, (height - pad * 2) / yRange) * zoomOut;
+  const scale =
+    Math.min((width - pad * 2) / xRange, (height - pad * 2) / yRange) * zoomOut;
   const xOffset = (width - xRange * scale) / 2;
   const yOffset = (height - yRange * scale) / 2;
   return (point) => ({
@@ -287,6 +288,4 @@ function drawEmpty(ctx, width, height) {
   ctx.fillText("当前筛选没有可绘制坐标", width / 2, height / 2);
 }
 
-init().catch((error) => {
-  document.body.innerHTML = `<pre style="padding:24px;color:#a12b2b">${error.stack}</pre>`;
-});
+init().catch(showPageError);

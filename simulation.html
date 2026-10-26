@@ -3,71 +3,112 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>吉林多 Drone 派送仿真</title>
-    <link rel="stylesheet" href="./src/styles.css" />
+    <title>轨迹回放 · LaDe 配送实验室</title>
+    <link rel="stylesheet" href="./src/styles.css?v=20261021-status-colors" />
   </head>
   <body>
+    <a class="skip-link" href="#workspace">跳到主要内容</a>
     <main class="app sim-app">
       <aside class="sidebar">
-        <div class="brand">
-          <img src="./assets/LaDe.png" alt="LaDe" />
-          <div>
-            <h1>Drone Delivery</h1>
-            <p>Jilin multi-agent demo</p>
-          </div>
-        </div>
+        <a class="brand" href="./dynamic.html" aria-label="LaDe 配送实验室"
+          ><span class="brand-symbol" aria-hidden="true"
+            ><svg viewBox="0 0 32 32" fill="none">
+              <path d="m6 17 20-11-8 21-3-9-9-1Z" fill="currentColor" />
+              <path
+                d="m15 18 6-7"
+                stroke="white"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              /></svg></span
+          ><span
+            ><h1>LaDe <span class="brand-tag">LAB</span></h1>
+            <p>多智能体配送实验室</p></span
+          ></a
+        >
+        <nav class="main-nav" aria-label="主要导航">
+          <a href="./dynamic.html"
+            ><svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 14h4l3-9 4 14 3-9h3" /></svg
+            >实时仿真</a
+          ><a href="./simulation.html" aria-current="page"
+            ><svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m9 5 11 7-11 7V5Z" /></svg
+            >轨迹回放<span class="nav-indicator"></span></a
+          ><a href="./index.html"
+            ><svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 19V9m8 10V4m8 15v-7" /></svg
+            >数据概览</a
+          >
+        </nav>
 
         <section class="control-panel" aria-label="仿真控制">
           <label>
-            Trace 文件
-            <select id="traceSelect"></select>
-          </label>
-          <button id="playPause" class="primary-action" type="button">播放</button>
-          <button id="reset" type="button">重置</button>
-          <label>
-            播放速度
-            <select id="speed">
-              <option value="220">慢速</option>
-              <option value="90" selected>正常</option>
-              <option value="35">快速</option>
-            </select>
+            轨迹文件
+            <select id="traceSelect"></select
+            ><small id="traceFileInfo" class="field-hint"
+              >正在读取轨迹目录</small
+            >
           </label>
         </section>
 
         <section class="meta">
-          <span>框架</span>
-          <strong>rule-based agents + auction coordinator</strong>
+          <span>回放说明</span>
+          <strong>历史轨迹 · 逐帧回看</strong>
         </section>
       </aside>
 
-      <section class="workspace">
+      <section id="workspace" class="workspace">
         <header class="topbar">
           <div>
-            <h2>吉林派送多 Agent 仿真</h2>
-            <p>5 个飞行机器人从中心 depot 出发，通过拍卖式协作分配完成 120 个派送任务。</p>
+            <p class="eyebrow">配送实验室 / 轨迹分析</p>
+            <h2 id="scenarioTitle">配送轨迹回放</h2>
+            <p id="scenarioCaption">选择轨迹文件，回看配送过程与无人机状态。</p>
           </div>
-          <div class="topbar-actions">
-            <a class="text-link" href="./dynamic.html">动态仿真</a>
-            <a class="text-link" href="./index.html">数据概览</a>
-          </div>
+          <span class="page-badge">离线回放</span>
         </header>
 
         <section class="kpis" aria-label="仿真指标">
           <article>
             <span>完成任务</span>
-            <strong id="completedTasks">-</strong>
+            <strong id="completedTasks">-</strong
+            ><small>当前帧的累计完成数</small>
           </article>
           <article>
-            <span>Drone</span>
-            <strong id="droneCount">-</strong>
+            <span>无人机</span>
+            <strong id="droneCount">-</strong
+            ><small>参与本次仿真的无人机</small>
           </article>
           <article>
-            <span>迟到任务</span>
-            <strong id="lateTasks">-</strong>
+            <span>最终迟到任务</span>
+            <strong id="lateTasks">-</strong><small>整段轨迹的最终统计</small>
           </article>
           <article>
-            <span>当前时间</span>
-            <strong id="simTime">-</strong>
+            <span>仿真时间</span>
+            <strong id="simTime">-</strong><small>进度条所选时刻</small>
           </article>
         </section>
 
@@ -75,28 +116,80 @@
           <div class="panel-head">
             <h3>派送轨迹</h3>
             <div class="panel-tools">
-              <button id="zoomOut" type="button" aria-label="缩小地图">-</button>
+              <button id="zoomOut" type="button" aria-label="缩小地图">
+                -
+              </button>
               <span id="zoomLabel">100%</span>
               <button id="zoomIn" type="button" aria-label="放大地图">+</button>
-              <button id="zoomReset" type="button">100%</button>
-              <span id="frameCaption">-</span>
+              <button id="zoomReset" type="button">适配视图</button>
             </div>
           </div>
-          <canvas id="simCanvas" width="1200" height="720"></canvas>
+          <canvas
+            id="simCanvas"
+            width="1200"
+            height="720"
+            aria-label="历史配送轨迹地图"
+          ></canvas>
+          <div class="map-legend" aria-label="地图图例">
+            <span><i class="legend-dot unreleased"></i>未下发</span
+            ><span><i class="legend-dot waiting"></i>待派单</span
+            ><span><i class="legend-dot assigned"></i>取货中</span
+            ><span><i class="legend-dot picked-up"></i>配送中</span
+            ><span><i class="legend-dot completed"></i>已完成</span
+            ><span><i class="legend-dot depot"></i>配送站</span
+            ><small>拖动平移 · 滚轮缩放</small>
+          </div>
+          <div class="playback-toolbar">
+            <div class="playback-actions">
+              <button
+                id="playPause"
+                class="primary-action"
+                type="button"
+                disabled
+              >
+                播放
+              </button>
+              <button id="reset" type="button">从头回放</button>
+              <label class="inline-control">
+                播放速度
+                <select id="speed">
+                  <option value="220">慢速</option>
+                  <option value="90" selected>正常</option>
+                  <option value="35">快速</option>
+                </select>
+              </label>
+            </div>
+            <span id="frameCaption" class="subtle-label">等待轨迹帧</span>
+          </div>
+          <div class="timeline replay-timeline">
+            <label for="replayProgress">回放进度</label
+            ><input
+              id="replayProgress"
+              type="range"
+              min="0"
+              max="0"
+              value="0"
+              step="1"
+              aria-label="历史轨迹进度"
+              disabled
+            /><output id="replayCaption" for="replayProgress"
+              >等待轨迹文件</output
+            >
+          </div>
         </section>
 
         <section class="panel table-panel">
           <div class="panel-head">
-            <h3>Agent 状态</h3>
+            <h3>无人机状态</h3>
             <span id="agentCaption">-</span>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Agent</th>
+                  <th>无人机</th>
                   <th>状态</th>
-                  <th>Region</th>
+                  <th>区域</th>
                   <th>队列</th>
                   <th>完成</th>
                   <th>飞行距离</th>
@@ -106,9 +199,16 @@
             </table>
           </div>
         </section>
+        <footer class="workspace-footer">
+          <span>LaDe 配送实验室</span
+          ><span>实时观测 · 历史回看 · 协同分析</span>
+        </footer>
       </section>
     </main>
 
-    <script type="module" src="./src/simulation_app.mjs"></script>
+    <script
+      type="module"
+      src="./src/simulation_app.mjs?v=20261021-status-colors"
+    ></script>
   </body>
 </html>

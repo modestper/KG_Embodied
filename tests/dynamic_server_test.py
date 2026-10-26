@@ -93,6 +93,21 @@ class DynamicServerTest(unittest.TestCase):
         self.assertEqual(done_payload["metrics"]["unfinished_tasks"], 1)
         self.assertEqual(done_payload["steps_run"], 1)
 
+    def test_sampled_frame_indexes_align_with_recorded_graph_steps(self):
+        env = self.make_env()
+        env.drones[0].speed_m_per_minute = 1
+        events = list(stream_simulation(
+            env, config={"city": "吉林市"}, depots=[], max_steps=8, frame_stride=3,
+        ))
+        frames = [json.loads(event.split("data: ", 1)[1])
+                  for event in events if event.startswith("event: frame\n")]
+
+        self.assertEqual([frame["frame_index"] for frame in frames], [0, 3, 6])
+        for frame in frames:
+            recorded_step = env.knowledge_store.steps[frame["frame_index"]]
+            self.assertEqual(recorded_step["step_index"], frame["frame_index"] + 1)
+            self.assertEqual(recorded_step["time_minute"], frame["frame"]["time_minute"])
+
     def test_stream_simulation_filters_stored_region_boundaries_to_active_regions(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "region_boundaries.json"

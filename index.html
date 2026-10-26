@@ -1,30 +1,76 @@
-
-
 <!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LaDe 数据集浏览器</title>
-    <link rel="stylesheet" href="./src/styles.css" />
+    <title>数据概览 · LaDe 配送实验室</title>
+    <link rel="stylesheet" href="./src/styles.css?v=20261021-status-colors" />
   </head>
   <body>
+    <a class="skip-link" href="#workspace">跳到主要内容</a>
     <main class="app">
       <aside class="sidebar">
-        <div class="brand">
-          <img src="./assets/LaDe.png" alt="LaDe" />
-          <div>
-            <h1>LaDe Viewer</h1>
-            <p>Last-mile delivery dataset</p>
-          </div>
-        </div>
+        <a class="brand" href="./dynamic.html" aria-label="LaDe 配送实验室"
+          ><span class="brand-symbol" aria-hidden="true"
+            ><svg viewBox="0 0 32 32" fill="none">
+              <path d="m6 17 20-11-8 21-3-9-9-1Z" fill="currentColor" />
+              <path
+                d="m15 18 6-7"
+                stroke="white"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              /></svg></span
+          ><span
+            ><h1>LaDe <span class="brand-tag">LAB</span></h1>
+            <p>多智能体配送实验室</p></span
+          ></a
+        >
+        <nav class="main-nav" aria-label="主要导航">
+          <a href="./dynamic.html"
+            ><svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 14h4l3-9 4 14 3-9h3" /></svg
+            >实时仿真</a
+          ><a href="./simulation.html"
+            ><svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m9 5 11 7-11 7V5Z" /></svg
+            >轨迹回放</a
+          ><a href="./index.html" aria-current="page"
+            ><svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 19V9m8 10V4m8 15v-7" /></svg
+            >数据概览<span class="nav-indicator"></span
+          ></a>
+        </nav>
 
         <section class="control-panel" aria-label="筛选">
           <label>
             任务类型
             <select id="taskType">
-              <option value="delivery">Delivery</option>
-              <option value="pickup">Pickup</option>
+              <option value="delivery">派送 Delivery</option>
+              <option value="pickup">揽收 Pickup</option>
             </select>
           </label>
           <label>
@@ -35,35 +81,37 @@
 
         <section class="meta">
           <span>数据源</span>
-          <strong id="sourceText">loading</strong>
+          <strong id="sourceText">正在加载</strong>
         </section>
       </aside>
 
-      <section class="workspace">
+      <section id="workspace" class="workspace">
         <header class="topbar">
           <div>
-            <h2>五城取派件时空概览</h2>
-            <p>城市规模、事件时间分布、抽样坐标和路网线段的交互式快照。</p>
+            <p class="eyebrow">配送实验室 / 数据分析</p>
+            <h2>数据概览</h2>
+            <p>从城市规模、时段分布与空间抽样，了解五城取派件数据。</p>
           </div>
-          <a class="text-link" href="./simulation.html">Drone 仿真</a>
+          <span class="page-badge">五城数据集</span>
         </header>
 
         <section class="kpis" aria-label="关键指标">
           <article>
             <span>任务量</span>
-            <strong id="totalTasks">-</strong>
+            <strong id="totalTasks">-</strong><small>当前城市与任务类型</small>
           </article>
           <article>
             <span>骑手数</span>
-            <strong id="totalCouriers">-</strong>
+            <strong id="totalCouriers">-</strong
+            ><small>当前范围内的配送骑手</small>
           </article>
           <article>
             <span>AOI</span>
-            <strong id="totalAoi">-</strong>
+            <strong id="totalAoi">-</strong><small>配送服务兴趣区域</small>
           </article>
           <article>
             <span>抽样点</span>
-            <strong id="sampleCount">-</strong>
+            <strong id="sampleCount">-</strong><small>地图中的抽样坐标</small>
           </article>
         </section>
 
@@ -79,9 +127,17 @@
           <article class="panel">
             <div class="panel-head">
               <h3>小时分布</h3>
-              <span>0-23 时</span>
+              <span class="count-badge">全局统计 · 0–23 时</span>
             </div>
-            <div id="hourChart" class="hour-chart"></div>
+            <p id="hourSummary" class="chart-summary">正在读取小时分布</p>
+            <div class="hour-chart-wrap">
+              <div
+                id="hourChart"
+                class="hour-chart"
+                aria-label="全局小时任务分布"
+              ></div>
+            </div>
+            <p class="chart-footnote">小时分布为所选任务类型的全部城市汇总。</p>
           </article>
         </section>
 
@@ -107,9 +163,13 @@
             </table>
           </div>
         </section>
+        <footer class="workspace-footer">
+          <span>LaDe 配送实验室</span
+          ><span>实时观测 · 历史回看 · 协同分析</span>
+        </footer>
       </section>
     </main>
 
-    <script type="module" src="./src/app.mjs"></script>
+    <script type="module" src="./src/app.mjs?v=20261021-status-colors"></script>
   </body>
 </html>

@@ -1,3 +1,16 @@
+export function frameStepIndex(payload) {
+  const explicitStep = payload?.step_index ?? payload?.frame?.step_index;
+  if (Number.isSafeInteger(explicitStep) && explicitStep >= 0)
+    return explicitStep;
+  const frameIndex = payload?.frame_index;
+  // SSE frame_index is zero-based; both simulation backends record Step from 1.
+  return Number.isSafeInteger(frameIndex) &&
+    frameIndex >= 0 &&
+    frameIndex < Number.MAX_SAFE_INTEGER
+    ? frameIndex + 1
+    : null;
+}
+
 export class FrameTimeline {
   constructor() {
     this.reset();
@@ -36,7 +49,9 @@ export class FrameTimeline {
 
   seek(index) {
     if (!this.frames.length) return null;
-    const numericIndex = Number.isFinite(Number(index)) ? Math.trunc(Number(index)) : 0;
+    const numericIndex = Number.isFinite(Number(index))
+      ? Math.trunc(Number(index))
+      : 0;
     this.cursor = Math.min(this.lastIndex, Math.max(0, numericIndex));
     this.followingLive = this.cursor === this.lastIndex;
     return this.current;

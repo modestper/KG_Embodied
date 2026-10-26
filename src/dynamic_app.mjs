@@ -2,14 +2,33 @@ import { buildDynamicRegions, outlinePoints } from "./dynamic_regions.mjs";
 import {
   assistanceRoleForDrone,
   assistanceVisuals,
-  frameHasActiveAssistance,
 } from "./dynamic_assistance.mjs";
-import { FrameTimeline } from "./dynamic_timeline.mjs";
+import {
+  FrameTimeline,
+  frameStepIndex,
+} from "./dynamic_timeline.mjs?v=20261021-step";
 import { initGraphQueryPanel } from "./dynamic_query.mjs";
 
-const colors = ["#1b8a6b", "#2866b6", "#b7791f", "#8a3ffc", "#c43d4b", "#4f6f52"];
-const minZoom = 0.25;
-const maxZoom = 50;
+import {
+  colors,
+  taskColors,
+  prepareCanvas,
+  drawGrid,
+  getBounds,
+  makeProjector,
+  clampZoom,
+  bindCanvasViewport,
+  resolveTaskStatus,
+} from "./canvas_utils.mjs?v=20261021-status-colors";
+import {
+  escapeHtml,
+  statusBadge,
+  droneStatusBadge,
+  initDisclosures,
+  initTabs,
+} from "./ui.mjs";
+
+let canvasRenderRequest = 0;
 
 const state = {
   source: null,
@@ -36,7 +55,10 @@ const state = {
   zoom: 1,
   panX: 0,
   panY: 0,
-  drag: null,
+  assistanceAutoPaused: false,
+  assistanceRoles: new Map(),
+  staticBounds: null,
+  taskPage: 0,
   regionBoundary: {
     enabled: true,
     width: 0.8,
@@ -48,10 +70,7 @@ const state = {
 const els = {
   canvas: document.querySelector("#liveCanvas"),
   playPause: document.querySelector("#playPause"),
-  resetRun: document.querySelector("#resetRun"),
   playSpeed: document.querySelector("#playSpeed"),
-  reconnect: document.querySelector("#reconnect"),
-  resetView: document.querySelector("#resetView"),
   zoomPreset: document.querySelector("#zoomPreset"),
   city: document.querySelector("#city"),
   day: document.querySelector("#day"),
@@ -79,6 +98,8 @@ const els = {
   idleDroneCount: document.querySelector("#idleDroneCount"),
   lateTasks: document.querySelector("#lateTasks"),
   simTime: document.querySelector("#simTime"),
+  currentStep: document.querySelector("#currentStep"),
+  stepCaption: document.querySelector("#stepCaption"),
   wallElapsed: document.querySelector("#wallElapsed"),
   frameCaption: document.querySelector("#frameCaption"),
   goLive: document.querySelector("#goLive"),
@@ -88,7 +109,6 @@ const els = {
   zoomOut: document.querySelector("#zoomOut"),
   zoomReset: document.querySelector("#zoomReset"),
   zoomLabel: document.querySelector("#zoomLabel"),
-  regionBoundaryMenu: document.querySelector("#regionBoundaryMenu"),
   regionBoundaryEnabled: document.querySelector("#regionBoundaryEnabled"),
   regionBoundaryWidth: document.querySelector("#regionBoundaryWidth"),
   regionBoundaryOpacity: document.querySelector("#regionBoundaryOpacity"),
@@ -99,19 +119,46 @@ const els = {
   taskTable: document.querySelector("#taskTable"),
   eventCaption: document.querySelector("#eventCaption"),
   eventList: document.querySelector("#eventList"),
+  completionProgress: document.querySelector("#completionProgress"),
+  taskFilter: document.querySelector("#taskFilter"),
+  taskSearch: document.querySelector("#taskSearch"),
+  taskPrev: document.querySelector("#taskPrev"),
+  taskNext: document.querySelector("#taskNext"),
+  taskPageInfo: document.querySelector("#taskPageInfo"),
+  toggleRunDetails: document.querySelector("#toggleRunDetails"),
+  runDetailsContent: document.querySelector("#runDetailsContent"),
   llmCaption: document.querySelector("#llmCaption"),
   llmInput: document.querySelector("#llmInput"),
   llmOutput: document.querySelector("#llmOutput"),
 };
 
 function init() {
+  initDisclosures();
+  initTabs(document.querySelector("#statusTabs"));
   bindEvents();
+  updateSettingsVisibility();
   void initGraphQueryPanel();
   connect();
   renderEmpty();
 }
 
 function bindEvents() {
+  els.toggleRunDetails.addEventListener("click", () => {
+    const collapse =
+      els.toggleRunDetails.getAttribute("aria-expanded") === "true";
+    els.runDetailsContent.hidden = collapse;
+    document.querySelector("#statusTabs").hidden = collapse;
+    els.toggleRunDetails.setAttribute("aria-expanded", String(!collapse));
+    els.toggleRunDetails.setAttribute(
+      "aria-label",
+      `${collapse ? "展开" : "收起"}运行明细`,
+    );
+    els.toggleRunDetails.querySelector(".collapse-label").textContent = collapse
+      ? "展开"
+      : "收起";
+    els.toggleRunDetails.closest(".data-panel").dataset.collapsed =
+      String(collapse);
+  });
   els.playPause.addEventListener("click", togglePlayback);
   els.goLive.addEventListener("click", goToLiveFrame);
   els.timelineProgress.addEventListener("pointerdown", beginTimelineScrub);
@@ -121,28 +168,53 @@ function bindEvents() {
   els.timelineProgress.addEventListener("change", endTimelineScrub);
   els.timelineProgress.addEventListener("keydown", beginKeyboardTimelineScrub);
   els.timelineProgress.addEventListener("keyup", endTimelineScrub);
-  els.resetRun.addEventListener("click", connect);
-  els.reconnect.addEventListener("click", connect);
+  document
+    .querySelector("#simulationSettings")
+    .addEventListener("submit", (event) => {
+      event.preventDefault();
+      connect();
+    });
+  els.useLlm.addEventListener("change", updateSettingsVisibility);
+  els.backend.addEventListener("change", updateSettingsVisibility);
+  for (const control of [els.taskFilter, els.taskSearch]) {
+    control.addEventListener(
+      control === els.taskSearch ? "input" : "change",
+      () => {
+        state.taskPage = 0;
+        renderTaskTable();
+      },
+    );
+  }
+  els.taskPrev.addEventListener("click", () => {
+    state.taskPage = Math.max(0, state.taskPage - 1);
+    renderTaskTable();
+  });
+  els.taskNext.addEventListener("click", () => {
+    state.taskPage += 1;
+    renderTaskTable();
+  });
   els.playSpeed.addEventListener("change", restartPlaybackTimer);
-  els.resetView.addEventListener("click", resetView);
   els.zoomPreset.addEventListener("change", () => {
-    if (els.zoomPreset.value !== "custom") setZoom(Number(els.zoomPreset.value));
+    if (els.zoomPreset.value !== "custom")
+      setZoom(Number(els.zoomPreset.value));
   });
   els.zoomIn.addEventListener("click", () => setZoom(state.zoom * 1.2));
   els.zoomOut.addEventListener("click", () => setZoom(state.zoom / 1.2));
   els.zoomReset.addEventListener("click", resetView);
-  els.regionBoundaryEnabled.addEventListener("change", updateRegionBoundaryStyle);
+  els.regionBoundaryEnabled.addEventListener(
+    "change",
+    updateRegionBoundaryStyle,
+  );
   els.regionBoundaryWidth.addEventListener("input", updateRegionBoundaryStyle);
-  els.regionBoundaryOpacity.addEventListener("input", updateRegionBoundaryStyle);
+  els.regionBoundaryOpacity.addEventListener(
+    "input",
+    updateRegionBoundaryStyle,
+  );
   els.regionBoundaryColor.addEventListener("input", updateRegionBoundaryStyle);
-  els.canvas.addEventListener("pointerdown", startPan);
-  els.canvas.addEventListener("pointermove", movePan);
-  els.canvas.addEventListener("pointerup", endPan);
-  els.canvas.addEventListener("pointerleave", endPan);
-  els.canvas.addEventListener("wheel", zoomAtPointer, { passive: false });
+  bindCanvasViewport(els.canvas, state, scheduleCanvasRender);
   window.addEventListener("pointerup", endTimelineScrub);
   window.addEventListener("pointercancel", endTimelineScrub);
-  window.addEventListener("resize", render);
+  window.addEventListener("resize", scheduleCanvasRender);
 }
 
 function connect() {
@@ -160,8 +232,17 @@ function connect() {
     const payload = JSON.parse(event.data);
     state.config = payload.config;
     state.depots = payload.depots ?? [];
-    state.regions = payload.regions ?? [];
     state.tasks = payload.tasks ?? [];
+    state.regions = payload.regions?.length
+      ? payload.regions
+      : buildDynamicRegions(state.tasks);
+    const staticPoints = [
+      ...state.tasks,
+      ...state.tasks.map((task) => ({ x: task.pickup_x, y: task.pickup_y })),
+      ...state.depots,
+      ...state.regions.flatMap(outlinePoints),
+    ];
+    state.staticBounds = getBounds(staticPoints);
     state.metrics = payload.metrics ?? null;
     state.stepSeconds = payload.step_seconds ?? null;
     resetView(false);
@@ -202,9 +283,11 @@ function connect() {
     stopWallTimer();
     setConnection("superseded");
     renderPlaybackButton();
+    renderRunStatus();
   });
   source.addEventListener("error", () => {
-    if (els.connectionStatus.textContent !== "done") setConnection("reconnecting");
+    if (els.connectionStatus.dataset.status !== "done")
+      setConnection("reconnecting");
   });
 }
 
@@ -216,14 +299,17 @@ function buildQuery() {
     task_limit: normalizedInt(els.taskLimit.value, 20),
     max_steps: normalizedInt(els.maxSteps.value, 1000),
     frame_stride: normalizedInt(els.frameStride.value, 1),
-    wall_interval: String(normalizedInt(els.wallIntervalMs.value, 250) / 1000),
+    wall_interval: String(
+      Math.max(0, Number(els.wallIntervalMs.value) || 0) / 1000,
+    ),
     use_llm: els.useLlm.checked ? "1" : "0",
     vllm_api_base: els.vllmApiBase.value.trim() || "http://127.0.0.1:6666/v1",
     vllm_model: els.vllmModel.value.trim() || "qwen2.5-7b",
     llm_max_tokens: normalizedInt(els.llmMaxTokens.value, 512),
   });
   if (els.backend.value) params.set("backend", els.backend.value);
-  if (els.rayAddress.value.trim()) params.set("ray_address", els.rayAddress.value.trim());
+  if (els.rayAddress.value.trim())
+    params.set("ray_address", els.rayAddress.value.trim());
   if (els.rayNumCpus.value.trim()) {
     params.set("ray_num_cpus", normalizedInt(els.rayNumCpus.value, 1));
   }
@@ -236,6 +322,7 @@ function normalizedInt(value, fallback) {
 }
 
 function togglePlayback() {
+  state.assistanceAutoPaused = false;
   if (state.streamDone && state.timeline.followingLive) return;
   if (state.playing) {
     state.playing = false;
@@ -260,7 +347,10 @@ function restartPlaybackTimer() {
     renderPlaybackButton();
     return;
   }
-  state.playbackTimer = window.setInterval(consumeFrame, Number(els.playSpeed.value));
+  state.playbackTimer = window.setInterval(
+    consumeFrame,
+    Number(els.playSpeed.value),
+  );
   renderPlaybackButton();
 }
 
@@ -299,7 +389,9 @@ function formatDuration(milliseconds) {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+  return [hours, minutes, seconds]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
 }
 
 function consumeFrame() {
@@ -329,11 +421,14 @@ function seekTimeline() {
   stopPlaybackTimer();
   if (state.timelineScrubbing) state.timeline.hold();
   state.playing =
-    state.timeline.followingLive && !state.streamDone && !state.timelineScrubbing;
+    state.timeline.followingLive &&
+    !state.streamDone &&
+    !state.timelineScrubbing;
   applyFramePayload(payload, { detectAssistance: false });
 }
 
 function beginTimelineScrub() {
+  state.assistanceAutoPaused = false;
   if (!state.timeline.length) return;
   state.timelineScrubbing = true;
   state.playing = false;
@@ -345,7 +440,11 @@ function beginTimelineScrub() {
 }
 
 function beginKeyboardTimelineScrub(event) {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
+  if (
+    !["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(
+      event.key,
+    )
+  ) {
     return;
   }
   beginTimelineScrub();
@@ -365,6 +464,7 @@ function endTimelineScrub() {
 }
 
 function goToLiveFrame() {
+  state.assistanceAutoPaused = false;
   const payload = state.timeline.goLive();
   if (!payload) return;
   state.playing = !state.streamDone;
@@ -375,6 +475,12 @@ function goToLiveFrame() {
 function applyFramePayload(payload, { detectAssistance = true } = {}) {
   state.frameIndex = payload.frame_index ?? state.frameIndex + 1;
   state.frame = payload.frame;
+  state.assistanceRoles = new Map(
+    (state.frame?.drones ?? []).map((drone) => [
+      drone.id,
+      assistanceRoleForDrone(drone, state.frame?.task_states),
+    ]),
+  );
   state.metrics = payload.metrics ?? state.metrics;
   state.kgEvents = payload.kg_events ?? state.kgEvents;
   state.llmEvents = payload.llm_events ?? state.llmEvents;
@@ -382,9 +488,10 @@ function applyFramePayload(payload, { detectAssistance = true } = {}) {
   if (
     detectAssistance &&
     !state.assistancePauseTriggered &&
-    frameHasActiveAssistance(state.frame)
+    [...state.assistanceRoles.values()].some(Boolean)
   ) {
     state.assistancePauseTriggered = true;
+    state.assistanceAutoPaused = true;
     state.playing = false;
     state.timeline.hold();
     stopPlaybackTimer();
@@ -399,7 +506,7 @@ function applyFinalSummary() {
 }
 
 function renderPlaybackButton() {
-  els.playPause.textContent = state.playing ? "暂停" : "播放";
+  els.playPause.textContent = state.playing ? "暂停画面" : "继续播放";
   els.playPause.disabled = state.streamDone && state.timeline.followingLive;
 }
 
@@ -421,18 +528,29 @@ function resetRuntime() {
   state.wallStartedAt = null;
   state.wallElapsedMs = 0;
   state.assistancePauseTriggered = false;
+  state.assistanceAutoPaused = false;
+  state.assistanceRoles = new Map();
+  state.staticBounds = null;
+  state.taskPage = 0;
   renderEmpty();
 }
 
 function setConnection(status) {
-  els.connectionStatus.textContent = status;
+  const labels = {
+    connecting: "正在连接",
+    connected: "实时已连接",
+    reconnecting: "正在重新连接",
+    done: "运行已结束",
+    superseded: "运行已被替换",
+  };
+  els.connectionStatus.textContent = labels[status] ?? status;
   els.connectionStatus.dataset.status = status;
+  renderRunStatus();
 }
 
 function setZoom(value) {
   state.zoom = clampZoom(value);
-  els.zoomPreset.value = presetValue(state.zoom);
-  render();
+  scheduleCanvasRender();
 }
 
 function resetView(shouldRender = true) {
@@ -440,56 +558,16 @@ function resetView(shouldRender = true) {
   state.panX = 0;
   state.panY = 0;
   els.zoomPreset.value = "1";
-  if (shouldRender) render();
-}
-
-function startPan(event) {
-  state.drag = {
-    x: event.clientX,
-    y: event.clientY,
-    panX: state.panX,
-    panY: state.panY,
-  };
-  els.canvas.setPointerCapture(event.pointerId);
-}
-
-function movePan(event) {
-  if (!state.drag) return;
-  state.panX = state.drag.panX + event.clientX - state.drag.x;
-  state.panY = state.drag.panY + event.clientY - state.drag.y;
-  render();
-}
-
-function endPan(event) {
-  if (!state.drag) return;
-  state.drag = null;
-  if (els.canvas.hasPointerCapture(event.pointerId)) {
-    els.canvas.releasePointerCapture(event.pointerId);
-  }
-}
-
-function zoomAtPointer(event) {
-  event.preventDefault();
-  const previousZoom = state.zoom;
-  const nextZoom = clampZoom(previousZoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
-  const rect = els.canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left - rect.width / 2;
-  const y = event.clientY - rect.top - rect.height / 2;
-  const ratio = nextZoom / previousZoom;
-  state.panX = x - (x - state.panX) * ratio;
-  state.panY = y - (y - state.panY) * ratio;
-  state.zoom = nextZoom;
-  els.zoomPreset.value = presetValue(state.zoom);
-  render();
-}
-
-function clampZoom(value) {
-  return Math.min(maxZoom, Math.max(minZoom, value));
+  if (shouldRender) scheduleCanvasRender();
 }
 
 function presetValue(value) {
-  const rounded = Math.round(value);
-  return ["1", "5", "20", "50"].includes(String(rounded)) ? String(rounded) : "custom";
+  const preset = [1, 5, 20, 50].find(
+    (entry) => Math.abs(entry - value) < 0.001,
+  );
+  els.zoomPreset.querySelector('[value="custom"]').textContent =
+    `${Math.round(value * 100)}%`;
+  return preset ? String(preset) : "custom";
 }
 
 function updateRegionBoundaryStyle() {
@@ -499,7 +577,7 @@ function updateRegionBoundaryStyle() {
     opacity: normalizedFloat(els.regionBoundaryOpacity.value, 0.35),
     color: els.regionBoundaryColor.value || "#26323b",
   };
-  render();
+  scheduleCanvasRender();
 }
 
 function normalizedFloat(value, fallback) {
@@ -520,12 +598,21 @@ function renderEmpty() {
   els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
   renderPlaybackButton();
   els.agentCaption.textContent = "-";
-  els.agentTable.innerHTML = "";
+  els.agentTable.innerHTML =
+    '<tr><td colspan="9" class="empty-state">等待无人机状态</td></tr>';
   els.taskCaption.textContent = "-";
-  els.taskTable.innerHTML = "";
+  els.taskTable.innerHTML =
+    '<tr><td colspan="10" class="empty-state">暂无已下发任务</td></tr>';
+  els.taskPageInfo.textContent = "暂无任务";
+  els.taskPrev.disabled = true;
+  els.taskNext.disabled = true;
+  els.completionProgress.style.setProperty("--progress", "0%");
+  els.completionProgress.setAttribute("aria-valuenow", "0");
   els.eventCaption.textContent = "-";
-  els.eventList.innerHTML = "";
-  els.llmCaption.textContent = "未调用";
+  els.eventList.innerHTML = '<li class="empty-state">等待任务事件</li>';
+  els.llmCaption.textContent = "等待仿真初始化";
+  els.runCaption.textContent = "正在初始化场景";
+  els.scenarioCaption.textContent = "正在连接仿真服务，等待场景数据。";
   els.llmInput.textContent = "-";
   els.llmOutput.textContent = "-";
   renderRunStatus();
@@ -539,12 +626,22 @@ function render() {
   }
 
   const metrics = state.metrics ?? {};
-  const completed = state.frame?.tasks?.completed ?? metrics.completed_tasks ?? 0;
+  const completed =
+    state.frame?.tasks?.completed ?? metrics.completed_tasks ?? 0;
   const releasedTaskStates = Object.values(state.frame?.task_states ?? {});
-  const releasedUnfinished = releasedTaskStates.filter((task) => task.status !== "completed").length;
+  const releasedUnfinished = releasedTaskStates.filter(
+    (task) => task.status !== "completed",
+  ).length;
   const drones = state.frame?.drones ?? [];
   const idleDrones = drones.filter((drone) => drone.status === "idle").length;
-  els.completedTasks.textContent = `${completed}/${metrics.total_tasks ?? state.tasks.length}`;
+  const total = metrics.total_tasks ?? state.tasks.length;
+  els.completedTasks.textContent = `${completed} / ${total}`;
+  const progress = total ? Math.min(100, (completed / total) * 100) : 0;
+  els.completionProgress.style.setProperty("--progress", `${progress}%`);
+  els.completionProgress.setAttribute(
+    "aria-valuenow",
+    String(Math.round(progress)),
+  );
   els.releasedUnfinishedTasks.textContent = `已下发未完成 ${releasedUnfinished}`;
   els.droneCount.textContent = String(metrics.drones ?? "-");
   els.idleDroneCount.textContent = `当前空闲 ${idleDrones}`;
@@ -553,17 +650,18 @@ function render() {
   renderFrameCaption();
   renderTimeline();
   els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
-  els.runCaption.textContent = `${state.config.city} ${state.config.day} · ${state.config.task_limit} tasks · ${state.config.drone_count} agents`;
-  els.scenarioCaption.textContent = [
-    `backend ${state.config.backend ?? "local"}`,
+  const city = state.config.city;
+  els.runCaption.textContent = `${city} · ${state.config.day} · ${state.config.drone_count} 架无人机 · ${state.config.task_limit} 个任务`;
+  els.scenarioCaption.textContent = `${city} · ${state.config.day} · ${state.config.region_count} 个区域 · ${state.config.llm_enabled ? "LLM 智能调度" : "规则协同调度"}`;
+  els.scenarioCaption.title = [
+    state.config.backend,
     rayConfigLabel(state.config),
-    `${state.config.coordinator_class} + ${state.config.planner}`,
-    `${state.config.region_count} regions`,
-    `LLM ${state.config.llm_enabled ? "on" : "off"}`,
+    state.config.coordinator_class,
+    state.config.planner,
   ]
     .filter(Boolean)
     .join(" · ");
-  els.agentCaption.textContent = state.config.depot_mode === "region" ? "region depot" : "center depot";
+  els.agentCaption.textContent = `${drones.length} 架无人机 · ${state.config.depot_mode === "region" ? "区域配送站" : "中心配送站"}`;
 
   renderAgentTable();
   renderTaskTable();
@@ -576,14 +674,23 @@ function render() {
 
 function renderFrameCaption() {
   if (!state.timeline.length) {
-    els.frameCaption.textContent = "frame 0";
+    els.frameCaption.textContent = "等待仿真帧";
     return;
   }
-  els.frameCaption.textContent = `frame ${state.frameIndex} · ${state.stepSeconds ?? "-"}s/step · 待显示 ${state.timeline.pending}`;
+  els.frameCaption.textContent = `第 ${state.frameIndex} 帧 · ${state.stepSeconds ?? "-"} 秒/步 · 待回放 ${state.timeline.pending} 帧`;
 }
 
 function renderTimeline() {
   const timeline = state.timeline;
+  const step = frameStepIndex(timeline.current);
+  const latestStep = frameStepIndex(timeline.frames[timeline.lastIndex]);
+  els.currentStep.textContent = step === null ? "—" : String(step);
+  els.currentStep.title =
+    "当前画面对应的 Step.step_index，可用于查询参数；历史回看时随所选帧更新。";
+  els.stepCaption.textContent =
+    step !== null && latestStep !== null && step !== latestStep
+      ? `step_index · 最新接收 ${latestStep}`
+      : "查询用 step_index";
   const hasFrames = timeline.length > 0;
   els.timelineProgress.disabled = !hasFrames;
   els.goLive.disabled = !hasFrames;
@@ -592,40 +699,57 @@ function renderTimeline() {
     els.timelineProgress.value = String(Math.max(0, timeline.cursor));
   }
   els.goLive.dataset.active = String(hasFrames && timeline.followingLive);
-  els.goLive.textContent = state.streamDone && timeline.followingLive ? "末帧" : "实时";
+  els.goLive.textContent =
+    state.streamDone && timeline.followingLive ? "末帧" : "实时";
   if (!hasFrames) {
     els.timelineCaption.textContent = "等待首个仿真帧";
     return;
   }
 
   const currentFrame = timeline.current?.frame_index ?? state.frameIndex;
-  const latestFrame = timeline.frames[timeline.lastIndex]?.frame_index ?? currentFrame;
+  const latestFrame =
+    timeline.frames[timeline.lastIndex]?.frame_index ?? currentFrame;
   const timeLabel = timeline.current?.frame?.time_label ?? "-";
   const mode = timeline.followingLive
     ? state.streamDone
       ? "已结束"
       : "实时"
     : "回看";
-  els.timelineCaption.textContent = `frame ${currentFrame}/${latestFrame} · ${timeLabel} · ${mode}`;
+  els.timelineCaption.textContent = `${currentFrame} / ${latestFrame} 帧 · ${timeLabel} · ${mode}`;
 }
 
 function renderRunStatus() {
+  if (els.connectionStatus.dataset.status === "superseded") {
+    els.runStatus.dataset.status = "reviewing";
+    els.runStatusTitle.textContent = "本页运行已被替换";
+    els.runStatusDetail.textContent =
+      "其他连接已启动新运行，当前保留已接收的历史画面。";
+    return;
+  }
   const completed = state.metrics?.completed_tasks ?? 0;
   const total = state.metrics?.total_tasks ?? state.tasks.length;
-  const unfinished = state.metrics?.unfinished_tasks ?? Math.max(0, total - completed);
+  const unfinished =
+    state.metrics?.unfinished_tasks ?? Math.max(0, total - completed);
 
   if (state.timeline.length && !state.timeline.followingLive) {
-    const latestFrame = state.timeline.frames[state.timeline.lastIndex]?.frame_index ?? "-";
-    const title = state.timeline.cursor === state.timeline.lastIndex ? "画面已暂停" : "历史回看";
+    const latestFrame =
+      state.timeline.frames[state.timeline.lastIndex]?.frame_index ?? "-";
+    const title = state.assistanceAutoPaused
+      ? "检测到互助 · 画面已暂停"
+      : state.timeline.cursor === state.timeline.lastIndex
+        ? "画面已暂停"
+        : "历史回看";
     els.runStatus.dataset.status = "reviewing";
     els.runStatusTitle.textContent = title;
-    els.runStatusDetail.textContent = `当前 frame ${state.frameIndex}，后台已接收至 frame ${latestFrame}`;
+    els.runStatusDetail.textContent = `${state.assistanceAutoPaused ? "首次互助已暂停画面。" : ""}当前第 ${state.frameIndex} 帧 · 后台已接收至 ${latestFrame} 帧${state.streamDone ? "，运行已结束" : "，仿真继续运行"}`;
     return;
   }
 
   if (!state.donePayload) {
     els.runStatus.dataset.status = "running";
-    els.runStatusTitle.textContent = state.config ? "仿真运行中" : "等待仿真初始化";
+    els.runStatusTitle.textContent = state.config
+      ? "仿真运行中"
+      : "等待仿真初始化";
     els.runStatusDetail.textContent = state.config
       ? `已完成 ${completed}/${total}，其中迟到完成 ${state.metrics?.late_tasks ?? 0}`
       : "等待实时帧数据";
@@ -641,7 +765,7 @@ function renderRunStatus() {
 
   els.runStatus.dataset.status = "incomplete";
   els.runStatusTitle.textContent = "仿真已停止，但任务未全部完成";
-  els.runStatusDetail.textContent = `达到最大帧数 ${state.donePayload.steps_run ?? state.config?.max_steps ?? "-"}，完成 ${completed}/${total}，仍有 ${unfinished} 个任务未完成`;
+  els.runStatusDetail.textContent = `达到最大步数 ${state.donePayload.steps_run ?? state.config?.max_steps ?? "-"}，完成 ${completed}/${total}，仍有 ${unfinished} 个任务未完成`;
 }
 
 function rayConfigLabel(config) {
@@ -654,28 +778,20 @@ function rayConfigLabel(config) {
 
 function renderAgentTable() {
   const drones = state.frame?.drones ?? [];
-  const taskStates = state.frame?.task_states ?? {};
-  els.agentTable.innerHTML = drones
-    .map(
-      (drone) => {
-        const role = assistanceRoleForDrone(drone, taskStates);
+  els.agentTable.innerHTML =
+    drones
+      .map((drone) => {
+        const role = state.assistanceRoles.get(drone.id);
         const rowClass = role ? assistanceVisuals[role].rowClass : "";
-        return `
-        <tr class="${rowClass}">
-          <td>${drone.id}</td>
-          <td>${drone.status}</td>
-          <td>${formatTakeover(drone)}</td>
-          <td>${drone.region_id ?? "-"}</td>
-          <td>${drone.queue.length}</td>
-          <td>${formatOnboard(drone)}</td>
-          <td>${formatBattery(drone)}</td>
-          <td>${drone.completed}</td>
-          <td>${Math.round(drone.distance_m).toLocaleString()} m</td>
-        </tr>
-      `;
-      },
-    )
-    .join("");
+        return `<tr class="${rowClass}">
+      <td>${escapeHtml(drone.id)}</td><td>${droneStatusBadge(drone.status)}</td>
+      <td>${role ? statusBadge(formatTakeover(drone) === "-" ? assistanceVisuals[role].label : formatTakeover(drone), role === "requester" ? "danger" : "success") : escapeHtml(formatTakeover(drone))}</td>
+      <td>${escapeHtml(drone.region_id)}</td><td>${drone.queue?.length ?? 0}</td><td>${formatOnboard(drone)}</td>
+      <td>${formatBattery(drone)}</td><td>${drone.completed}</td><td>${Math.round(drone.distance_m).toLocaleString()} m</td>
+    </tr>`;
+      })
+      .join("") ||
+    '<tr><td colspan="9" class="empty-state">等待无人机状态</td></tr>';
 }
 
 function formatOnboard(drone) {
@@ -687,8 +803,14 @@ function formatOnboard(drone) {
 function formatBattery(drone) {
   const remaining = Number(drone.battery_remaining_m);
   const capacity = Number(drone.battery_capacity_m);
-  if (!Number.isFinite(remaining) || !Number.isFinite(capacity) || capacity <= 0) return "-";
-  return `${(remaining / 1000).toFixed(1)} / ${(capacity / 1000).toFixed(0)} km`;
+  if (
+    !Number.isFinite(remaining) ||
+    !Number.isFinite(capacity) ||
+    capacity <= 0
+  )
+    return "—";
+  const level = Math.max(0, Math.min(100, (remaining / capacity) * 100));
+  return `<span class="battery-cell" data-low="${level <= 20}"><span>${(remaining / 1000).toFixed(1)} / ${(capacity / 1000).toFixed(0)} km</span><i class="battery-track" style="--level: ${level}%"></i></span>`;
 }
 
 function formatTakeover(drone) {
@@ -702,36 +824,77 @@ function formatTakeover(drone) {
 function renderTaskTable() {
   const currentMinute = state.frame?.time_minute;
   const taskStates = state.frame?.task_states ?? {};
-  const releasedTasks = state.tasks
-    .map((task, index) => ({ task, index }))
-    .filter(({ task }) => Number.isFinite(currentMinute) && task.release <= currentMinute);
-  const completed = releasedTasks.filter(({ task }) => taskStates[task.id]?.status === "completed").length;
-  els.taskCaption.textContent = `${releasedTasks.length} 已下发 · ${completed} 已完成`;
-  els.taskTable.innerHTML = releasedTasks
-    .map(({ task, index }) => {
-      const taskState = taskStates[task.id] ?? { status: "waiting" };
-      return `
-        <tr>
-          <td>${index + 1}</td>
-          <td>${task.id}</td>
-          <td>${task.region_id ?? "-"}</td>
-          <td>${formatMinuteValue(task.release)}</td>
-          <td>${formatMinuteValue(task.deadline)}</td>
-          <td>${taskStatusLabel(taskState)}</td>
-          <td>${taskAssistanceLabel(taskState)}</td>
-          <td>${taskState.assigned_to ?? "-"}</td>
-          <td>${formatMinuteValue(taskState.completed_at)}</td>
-          <td>${taskTimelinessLabel(taskState)}</td>
-        </tr>
-      `;
-    })
-    .join("");
+  const released = state.tasks
+    .map((task, index) => ({
+      task,
+      index,
+      taskState: taskStates[task.id] ?? { status: "waiting" },
+    }))
+    .filter(
+      ({ task }) =>
+        Number.isFinite(currentMinute) && task.release <= currentMinute,
+    );
+  const filter = els.taskFilter.value;
+  const search = els.taskSearch.value.trim().toLowerCase();
+  const tasks = released.filter(({ task, taskState }) => {
+    if (filter === "unfinished" && taskState.status === "completed")
+      return false;
+    if (filter === "completed" && taskState.status !== "completed")
+      return false;
+    if (
+      filter === "assistance" &&
+      !taskState.assistance_reason &&
+      !taskState.assistance_source_drone_id &&
+      !taskState.handover_from_drone_id
+    )
+      return false;
+    return (
+      !search ||
+      [task.id, task.region_id, taskState.assigned_to].some((value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .includes(search),
+      )
+    );
+  });
+  const pages = Math.max(1, Math.ceil(tasks.length / 50));
+  state.taskPage = Math.min(Math.max(0, state.taskPage), pages - 1);
+  const start = state.taskPage * 50;
+  els.taskCaption.textContent = `${released.length} 已下发 · ${released.filter(({ taskState }) => taskState.status === "completed").length} 已完成`;
+  els.taskTable.innerHTML =
+    tasks
+      .slice(start, start + 50)
+      .map(({ task, index, taskState }) => {
+        const tone =
+          taskState.status === "completed"
+            ? "success"
+            : taskState.picked_up || taskState.status === "picked_up"
+              ? "active"
+              : taskState.status === "assigned"
+                ? "warning"
+                : "neutral";
+        const assistance = taskAssistanceLabel(taskState);
+        return `<tr><td>${index + 1}</td><td>${escapeHtml(task.id)}</td><td>${escapeHtml(task.region_id)}</td>
+      <td>${formatMinuteValue(task.release)}</td><td>${formatMinuteValue(task.deadline)}</td>
+      <td>${statusBadge(taskStatusLabel(taskState), tone)}</td><td>${assistance === "-" ? "—" : statusBadge(assistance, "warning")}</td>
+      <td>${escapeHtml(taskState.assigned_to)}</td><td>${formatMinuteValue(taskState.completed_at)}</td>
+      <td>${taskState.status === "completed" ? statusBadge(taskTimelinessLabel(taskState), taskState.late ? "danger" : "success") : "—"}</td></tr>`;
+      })
+      .join("") ||
+    '<tr><td colspan="10" class="empty-state">当前筛选下没有任务</td></tr>';
+  els.taskPageInfo.textContent = tasks.length
+    ? `共 ${tasks.length} 条 · 第 ${start + 1}–${Math.min(start + 50, tasks.length)} 条 · ${state.taskPage + 1}/${pages} 页`
+    : "当前筛选下暂无任务";
+  els.taskPrev.disabled = state.taskPage === 0;
+  els.taskNext.disabled = state.taskPage >= pages - 1;
 }
 
 function taskStatusLabel(taskState) {
   if (taskState.status === "completed") return "已完成";
-  if (taskState.handover_from_drone_id && !taskState.picked_up) return "前往交接";
-  if (taskState.handover_from_drone_id && taskState.picked_up) return "接管配送";
+  if (taskState.handover_from_drone_id && !taskState.picked_up)
+    return "前往交接";
+  if (taskState.handover_from_drone_id && taskState.picked_up)
+    return "接管配送";
   if (taskState.status === "picked_up" || taskState.picked_up) return "配送中";
   if (taskState.status === "assigned") return "前往取货";
   return "等待派单";
@@ -757,37 +920,54 @@ function formatMinuteValue(value) {
   const hour = Math.floor(totalSeconds / 3600);
   const minute = Math.floor((totalSeconds % 3600) / 60);
   const second = totalSeconds % 60;
-  return [hour, minute, second].map((part) => String(part).padStart(2, "0")).join(":");
+  return [hour, minute, second]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
 }
 
 function renderEvents() {
   const events = state.kgEvents.slice(-8).reverse();
-  els.eventCaption.textContent = `${state.kgEvents.length} events`;
-  els.eventList.innerHTML = events
-    .map(
-      (event) => `
-        <li>
-          <strong>${event.type}</strong>
-          <span>${formatEvent(event)}</span>
-        </li>
-      `,
-    )
-    .join("");
+  const labels = {
+    task_assigned: "任务已派发",
+    task_completed: "任务已送达",
+    task_picked_up: "已取货，开始配送",
+    task_assistance_requested: "任务请求支援",
+    assist_dispatched: "援助无人机已出发",
+    task_handover_completed: "任务交接完成",
+    task_taken_over: "任务已接管",
+    drone_low_battery: "无人机电量偏低",
+    drone_returning_to_charge: "无人机返航充电",
+    drone_charged: "无人机充电完成",
+  };
+  els.eventCaption.textContent = `${events.length} 条`;
+  els.eventList.innerHTML =
+    events
+      .map(
+        (event) =>
+          `<li><strong>${escapeHtml(labels[event.type] ?? event.type)}</strong><span>${escapeHtml(formatEvent(event))}</span></li>`,
+      )
+      .join("") || '<li class="empty-state">暂无近期事件</li>';
 }
 
 function renderLlmEvents() {
   const latest = state.llmEvents.at(-1);
   if (!latest) {
-    const logName = state.config?.llm_log_path ? ` · ${basename(state.config.llm_log_path)}` : "";
-    els.llmCaption.textContent = state.config?.llm_enabled ? `等待 LLM 调用${logName}` : "LLM off";
+    const logName = state.config?.llm_log_path
+      ? ` · ${basename(state.config.llm_log_path)}`
+      : "";
+    els.llmCaption.textContent = state.config?.llm_enabled
+      ? `等待 LLM 调用${logName}`
+      : "未启用智能调度 · 可在场景设置中开启";
     els.llmInput.textContent = "-";
     els.llmOutput.textContent = "-";
     return;
   }
 
-  const status = latest.used_fallback ? "fallback" : "ok";
+  const status = latest.used_fallback ? "已回退规则调度" : "调用成功";
   const elapsed = latest.elapsed_ms == null ? "-" : `${latest.elapsed_ms} ms`;
-  const logName = state.config?.llm_log_path ? ` · ${basename(state.config.llm_log_path)}` : "";
+  const logName = state.config?.llm_log_path
+    ? ` · ${basename(state.config.llm_log_path)}`
+    : "";
   els.llmCaption.textContent = `${latest.time} · R${latest.region_id} · ${status} · ${elapsed} · max ${latest.max_tokens}${logName}`;
   els.llmInput.textContent = formatJsonForPanel(latest.request);
   els.llmOutput.textContent = formatJsonForPanel({
@@ -810,12 +990,16 @@ function basename(path) {
 function formatEvent(event) {
   const parts = [
     event.time_label ?? event.time_minute,
-    event.region_id ? `R${event.region_id}` : null,
-    event.task_id ? `task ${event.task_id}` : null,
+    event.region_id != null ? `区域 ${event.region_id}` : null,
+    event.task_id ? `任务 ${event.task_id}` : null,
     event.source_drone_id && event.helper_drone_id
       ? `${event.source_drone_id} → ${event.helper_drone_id}`
       : null,
-    event.reason ?? null,
+    { failure: "故障接管", low_battery: "低电支援", deadline_risk: "时效支援" }[
+      event.reason
+    ] ??
+      event.reason ??
+      null,
     event.drone_id ?? null,
   ].filter(Boolean);
   return parts.join(" · ");
@@ -827,71 +1011,40 @@ function renderCanvas() {
     drawEmptyCanvas();
     return;
   }
-  const canvas = els.canvas;
-  const rect = canvas.getBoundingClientRect();
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.max(760, Math.floor(rect.width * ratio));
-  canvas.height = Math.max(460, Math.floor(rect.height * ratio));
-
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  const width = canvas.width / ratio;
-  const height = canvas.height / ratio;
-  ctx.clearRect(0, 0, width, height);
-
-  const regions = currentRegions();
-  const points = [
-    ...state.tasks.map((task) => ({ x: task.x, y: task.y })),
-    ...state.tasks.map((task) => ({ x: task.pickup_x, y: task.pickup_y })),
-    ...state.depots.map((depot) => ({ x: depot.x, y: depot.y })),
-    ...regions.flatMap((region) => outlinePoints(region)),
-    ...frame.drones.map((drone) => ({ x: drone.x, y: drone.y })),
-  ].filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
-
-  const project = makeProjector(getBounds(points), width, height, state.zoom, state.panX, state.panY);
+  const { ctx, width, height } = prepareCanvas(els.canvas);
+  const bounds = state.staticBounds;
+  const points = bounds
+    ? [
+        { x: bounds.minX, y: bounds.minY },
+        { x: bounds.maxX, y: bounds.maxY },
+        ...frame.drones,
+      ]
+    : frame.drones;
+  const project = makeProjector(
+    getBounds(points),
+    width,
+    height,
+    state.zoom,
+    state.panX,
+    state.panY,
+  );
   drawGrid(ctx, width, height);
-  drawRegionOutlines(ctx, project, regions);
+  drawRegionOutlines(ctx, project, currentRegions());
   drawDepots(ctx, project);
   drawPickupLinks(ctx, project, frame);
   drawTasks(ctx, project, frame);
   drawRoutes(ctx, project, frame);
   drawDrones(ctx, project, frame);
-  drawLegend(ctx, width, height);
 }
 
 function drawEmptyCanvas() {
-  const canvas = els.canvas;
-  const rect = canvas.getBoundingClientRect();
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.max(760, Math.floor(rect.width * ratio));
-  canvas.height = Math.max(460, Math.floor(rect.height * ratio));
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  const width = canvas.width / ratio;
-  const height = canvas.height / ratio;
-  ctx.clearRect(0, 0, width, height);
+  const { ctx, width, height } = prepareCanvas(els.canvas);
   drawGrid(ctx, width, height);
-  ctx.fillStyle = "#68707c";
-  ctx.font = "600 14px sans-serif";
-  ctx.fillText("等待动态仿真数据", 28, 34);
-}
-
-function drawGrid(ctx, width, height) {
-  ctx.save();
-  ctx.strokeStyle = "#e7ebef";
-  for (let x = 40; x < width; x += 80) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-  for (let y = 40; y < height; y += 80) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-  }
-  ctx.restore();
+  ctx.fillStyle = "#a0acc2";
+  ctx.font = "13px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("正在连接仿真，等待首帧数据", width / 2, height / 2);
+  ctx.textAlign = "start";
 }
 
 function drawRegionOutlines(ctx, project, regions) {
@@ -935,7 +1088,7 @@ function drawClosedPath(ctx, points) {
 }
 
 function currentRegions() {
-  return state.regions.length ? state.regions : buildDynamicRegions(state.tasks);
+  return state.regions;
 }
 
 function drawDepots(ctx, project) {
@@ -966,7 +1119,7 @@ function drawPickupLinks(ctx, project, frame) {
   ctx.setLineDash([2, 5]);
   for (const task of state.tasks) {
     const status = resolveTaskStatus(task, frame);
-    if (status === "completed") continue;
+    if (status === "completed" || status === "unreleased") continue;
     const from = project({ x: task.pickup_x, y: task.pickup_y });
     const to = project(task);
     ctx.beginPath();
@@ -982,16 +1135,10 @@ function drawTasks(ctx, project, frame) {
     const point = project(task);
     const status = resolveTaskStatus(task, frame);
     ctx.beginPath();
-    if (status === "completed") ctx.fillStyle = "#c9d1d9";
-    else if (status === "assigned") ctx.fillStyle = "#f1b44c";
-    else ctx.fillStyle = "#1b8a6b";
+    ctx.fillStyle = taskColors[status] ?? taskColors.waiting;
     ctx.arc(point.x, point.y, state.zoom >= 5 ? 4.5 : 3.2, 0, Math.PI * 2);
     ctx.fill();
   }
-}
-
-function resolveTaskStatus(task, frame) {
-  return frame.task_statuses?.[task.id] ?? task.status ?? "waiting";
 }
 
 function drawRoutes(ctx, project, frame) {
@@ -1014,7 +1161,7 @@ function drawRoutes(ctx, project, frame) {
 function drawDrones(ctx, project, frame) {
   for (const [index, drone] of frame.drones.entries()) {
     const point = project(drone);
-    const role = assistanceRoleForDrone(drone, frame.task_states);
+    const role = state.assistanceRoles.get(drone.id);
     ctx.save();
     ctx.fillStyle = colors[index % colors.length];
     ctx.beginPath();
@@ -1043,98 +1190,19 @@ function drawDrones(ctx, project, frame) {
   }
 }
 
-function drawLegend(ctx, width, height) {
-  ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.94)";
-  ctx.strokeStyle = "#d7dde3";
-  roundRect(ctx, 18, height - 98, 330, 78, 6);
-  ctx.fill();
-  ctx.stroke();
-  const items = [
-    ["#1b8a6b", "waiting"],
-    ["#f1b44c", "assigned"],
-    ["#c9d1d9", "completed"],
-    ["#20242a", "depot"],
-  ];
-  ctx.font = "12px sans-serif";
-  for (const [index, [color, label]] of items.entries()) {
-    const x = 32 + index * 74;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    if (label === "depot") {
-      ctx.rect(x - 4, height - 78, 8, 8);
-      ctx.fill();
-    } else {
-      ctx.arc(x, height - 74, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = "#3e4650";
-    ctx.fillText(label, x - 12, height - 55);
-  }
-  const assistanceItems = [
-    [assistanceVisuals.requester.borderColor, assistanceVisuals.requester.label],
-    [assistanceVisuals.helper.borderColor, assistanceVisuals.helper.label],
-  ];
-  for (const [index, [color, label]] of assistanceItems.entries()) {
-    const x = 32 + index * 148;
-    const y = height - 34;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(x, y - 7);
-    ctx.lineTo(x + 7, y + 6);
-    ctx.lineTo(x, y + 3);
-    ctx.lineTo(x - 7, y + 6);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = "#3e4650";
-    ctx.fillText(label, x + 13, y + 4);
-  }
-  ctx.restore();
+function updateSettingsVisibility() {
+  document.querySelector("#llmSettings").hidden = !els.useLlm.checked;
+  document.querySelector("#raySettings").hidden = els.backend.value === "local";
 }
 
-function getBounds(points) {
-  if (!points.length) {
-    return { minX: 0, maxX: 1, minY: 0, maxY: 1 };
-  }
-  return points.reduce(
-    (bounds, point) => ({
-      minX: Math.min(bounds.minX, point.x),
-      maxX: Math.max(bounds.maxX, point.x),
-      minY: Math.min(bounds.minY, point.y),
-      maxY: Math.max(bounds.maxY, point.y),
-    }),
-    {
-      minX: points[0].x,
-      maxX: points[0].x,
-      minY: points[0].y,
-      maxY: points[0].y,
-    },
-  );
-}
-
-function makeProjector(bounds, width, height, zoom = 1, panX = 0, panY = 0) {
-  const pad = 42;
-  const zoomOut = 0.86;
-  const xRange = bounds.maxX - bounds.minX || 1;
-  const yRange = bounds.maxY - bounds.minY || 1;
-  const scale = Math.min((width - pad * 2) / xRange, (height - pad * 2) / yRange) * zoomOut * zoom;
-  const xOffset = (width - xRange * scale) / 2;
-  const yOffset = (height - yRange * scale) / 2;
-  return (point) => ({
-    x: xOffset + (point.x - bounds.minX) * scale + panX,
-    y: height - yOffset - (point.y - bounds.minY) * scale + panY,
+function scheduleCanvasRender() {
+  els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+  els.zoomPreset.value = presetValue(state.zoom);
+  if (canvasRenderRequest) return;
+  canvasRenderRequest = requestAnimationFrame(() => {
+    canvasRenderRequest = 0;
+    renderCanvas();
   });
-}
-
-function roundRect(ctx, x, y, width, height, radius) {
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.arcTo(x + width, y, x + width, y + height, radius);
-  ctx.arcTo(x + width, y + height, x, y + height, radius);
-  ctx.arcTo(x, y + height, x, y, radius);
-  ctx.arcTo(x, y, x + width, y, radius);
-  ctx.closePath();
 }
 
 init();

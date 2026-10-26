@@ -1,6 +1,17 @@
-const colors = ["#1b8a6b", "#2866b6", "#b7791f", "#8a3ffc", "#c43d4b", "#4f6f52"];
-const minZoom = 0.25;
-const maxZoom = 50;
+import {
+  colors,
+  taskColors,
+  prepareCanvas,
+  drawGrid,
+  getBounds,
+  makeProjector,
+  clampZoom,
+  bindCanvasViewport,
+  resolveTaskStatus,
+} from "./canvas_utils.mjs?v=20261021-status-colors";
+import { escapeHtml, droneStatusBadge, showPageError } from "./ui.mjs";
+
+let canvasRenderRequest = 0;
 
 const state = {
   trace: null,
@@ -12,7 +23,10 @@ const state = {
   zoom: 1,
   panX: 0,
   panY: 0,
-  drag: null,
+  loading: true,
+  loadSequence: 0,
+  loadController: null,
+  staticBounds: null,
 };
 
 const els = {
@@ -31,6 +45,11 @@ const els = {
   zoomReset: document.querySelector("#zoomReset"),
   zoomLabel: document.querySelector("#zoomLabel"),
   agentCaption: document.querySelector("#agentCaption"),
+  progress: document.querySelector("#replayProgress"),
+  progressCaption: document.querySelector("#replayCaption"),
+  scenarioTitle: document.querySelector("#scenarioTitle"),
+  scenarioCaption: document.querySelector("#scenarioCaption"),
+  fileInfo: document.querySelector("#traceFileInfo"),
   agentTable: document.querySelector("#agentTable"),
 };
 
@@ -43,24 +62,101 @@ async function init() {
 
 async function loadTraceIndex() {
   const response = await fetch("./data/traces.json");
-  if (!response.ok) throw new Error(`Unable to load traces.json: ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Unable to load traces.json: ${response.status}`);
   const payload = await response.json();
   state.traces = payload.traces ?? [];
   const requested = new URLSearchParams(window.location.search).get("trace");
-  state.traceFile = requested || state.traces[0]?.file || "delivery_sim_current.json";
+  state.traceFile =
+    requested || state.traces[0]?.file || "delivery_sim_current.json";
   els.traceSelect.innerHTML = state.traces
-    .map((trace) => `<option value="${trace.file}">${trace.label}</option>`)
+    .map(
+      (trace) =>
+        `<option value="${escapeHtml(trace.file)}">${escapeHtml(trace.label)}</option>`,
+    )
     .join("");
+  if (!state.traces.some((trace) => trace.file === state.traceFile)) {
+    const option = document.createElement("option");
+    option.value = state.traceFile;
+    option.textContent = state.traceFile;
+    els.traceSelect.append(option);
+  }
   els.traceSelect.value = state.traceFile;
 }
 
 async function loadSelectedTrace() {
+  const sequence = ++state.loadSequence;
+  state.loadController?.abort();
+  state.loadController = new AbortController();
   stop();
-  const response = await fetch(`./data/${encodeURIComponent(state.traceFile)}`);
-  if (!response.ok) throw new Error(`Unable to load ${state.traceFile}: ${response.status}`);
-  state.trace = await response.json();
-  state.frameIndex = 0;
-  resetView();
+  state.loading = true;
+  state.trace = null;
+  els.playPause.disabled = true;
+  els.reset.disabled = true;
+  els.progress.disabled = true;
+  for (const metric of [
+    els.completedTasks,
+    els.droneCount,
+    els.lateTasks,
+    els.simTime,
+  ]) {
+    metric.textContent = "—";
+  }
+  els.progress.max = "0";
+  els.progress.value = "0";
+  els.progressCaption.textContent = "正在加载轨迹";
+  els.agentTable.innerHTML =
+    '<tr><td colspan="6" class="empty-state">正在加载无人机状态</td></tr>';
+  document.querySelector(".page-notice")?.remove();
+  const entry = state.traces.find((trace) => trace.file === state.traceFile);
+  const size = entry?.size_bytes
+    ? `${(entry.size_bytes / 1024 / 1024).toFixed(1)} MiB · `
+    : "";
+  els.fileInfo.textContent = `${size}正在加载轨迹…`;
+  els.scenarioCaption.textContent = "正在读取轨迹文件，请稍候。";
+  scheduleCanvasRender();
+  try {
+    const response = await fetch(
+      `./data/${encodeURIComponent(state.traceFile)}`,
+      { signal: state.loadController.signal },
+    );
+    if (!response.ok)
+      throw new Error(`无法读取 ${state.traceFile}（HTTP ${response.status}）`);
+    const trace = await response.json();
+    if (sequence !== state.loadSequence) return;
+    if (!Array.isArray(trace.frames) || !trace.frames.length)
+      throw new Error("轨迹文件没有可回放的帧。");
+    state.trace = trace;
+    state.frameIndex = 0;
+    state.staticBounds = getBounds([
+      ...(trace.tasks ?? []),
+      ...(trace.depots ?? []),
+      trace.config?.depot,
+    ]);
+    const config = trace.config ?? {};
+    const city = config.city || entry?.city || "配送";
+    els.scenarioTitle.textContent = `${city} · 轨迹回放`;
+    els.scenarioCaption.textContent = `${config.day || entry?.day || "全部日期"} · ${trace.metrics.total_tasks} 个任务 · ${trace.metrics.drones} 架无人机 · ${trace.frames.length.toLocaleString()} 帧`;
+    els.fileInfo.textContent = `${size}已加载 ${trace.frames.length.toLocaleString()} 帧`;
+    document.title = `${city}轨迹回放 · LaDe 配送实验室`;
+    resetView();
+  } catch (error) {
+    if (sequence !== state.loadSequence || error.name === "AbortError") return;
+    els.fileInfo.textContent = "轨迹加载失败";
+    els.scenarioCaption.textContent = "读取失败，可重试或选择其他轨迹文件。";
+    els.progressCaption.textContent = "轨迹未加载";
+    els.agentTable.innerHTML =
+      '<tr><td colspan="6" class="empty-state">无法加载无人机状态</td></tr>';
+    throw error;
+  } finally {
+    if (sequence === state.loadSequence) {
+      state.loading = false;
+      els.playPause.disabled = !state.trace;
+      els.reset.disabled = !state.trace;
+      els.progress.disabled = !state.trace;
+      scheduleCanvasRender();
+    }
+  }
 }
 
 function bindEvents() {
@@ -69,8 +165,12 @@ function bindEvents() {
     const url = new URL(window.location.href);
     url.searchParams.set("trace", state.traceFile);
     window.history.replaceState({}, "", url);
-    await loadSelectedTrace();
-    render();
+    try {
+      await loadSelectedTrace();
+      render();
+    } catch (error) {
+      showPageError(error);
+    }
   });
   els.playPause.addEventListener("click", togglePlayback);
   els.reset.addEventListener("click", reset);
@@ -84,12 +184,14 @@ function bindEvents() {
   els.zoomIn.addEventListener("click", () => setZoom(state.zoom * 1.2));
   els.zoomOut.addEventListener("click", () => setZoom(state.zoom / 1.2));
   els.zoomReset.addEventListener("click", resetView);
-  els.canvas.addEventListener("pointerdown", startPan);
-  els.canvas.addEventListener("pointermove", movePan);
-  els.canvas.addEventListener("pointerup", endPan);
-  els.canvas.addEventListener("pointerleave", endPan);
-  els.canvas.addEventListener("wheel", zoomAtPointer, { passive: false });
-  window.addEventListener("resize", render);
+  bindCanvasViewport(els.canvas, state, scheduleCanvasRender);
+  els.progress.addEventListener("input", () => {
+    if (!state.trace) return;
+    stop();
+    state.frameIndex = Number(els.progress.value);
+    render();
+  });
+  window.addEventListener("resize", scheduleCanvasRender);
 }
 
 function togglePlayback() {
@@ -98,9 +200,14 @@ function togglePlayback() {
 }
 
 function start() {
+  if (!state.trace || state.loading) return;
+  if (state.frameIndex >= state.trace.frames.length - 1) state.frameIndex = 0;
   els.playPause.textContent = "暂停";
   state.timer = window.setInterval(() => {
-    state.frameIndex = Math.min(state.frameIndex + 1, state.trace.frames.length - 1);
+    state.frameIndex = Math.min(
+      state.frameIndex + 1,
+      state.trace.frames.length - 1,
+    );
     render();
     if (state.frameIndex >= state.trace.frames.length - 1) stop();
   }, state.intervalMs);
@@ -120,156 +227,98 @@ function reset() {
 
 function setZoom(value) {
   state.zoom = clampZoom(value);
-  render();
+  scheduleCanvasRender();
 }
 
 function resetView() {
   state.zoom = 1;
   state.panX = 0;
   state.panY = 0;
-  render();
-}
-
-function startPan(event) {
-  state.drag = {
-    x: event.clientX,
-    y: event.clientY,
-    panX: state.panX,
-    panY: state.panY,
-  };
-  els.canvas.setPointerCapture(event.pointerId);
-}
-
-function movePan(event) {
-  if (!state.drag) return;
-  state.panX = state.drag.panX + event.clientX - state.drag.x;
-  state.panY = state.drag.panY + event.clientY - state.drag.y;
-  render();
-}
-
-function endPan(event) {
-  if (!state.drag) return;
-  state.drag = null;
-  if (els.canvas.hasPointerCapture(event.pointerId)) {
-    els.canvas.releasePointerCapture(event.pointerId);
-  }
-}
-
-function zoomAtPointer(event) {
-  event.preventDefault();
-  const previousZoom = state.zoom;
-  const nextZoom = clampZoom(previousZoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
-  const rect = els.canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left - rect.width / 2;
-  const y = event.clientY - rect.top - rect.height / 2;
-  const ratio = nextZoom / previousZoom;
-  state.panX = x - (x - state.panX) * ratio;
-  state.panY = y - (y - state.panY) * ratio;
-  state.zoom = nextZoom;
-  render();
-}
-
-function clampZoom(value) {
-  return Math.min(maxZoom, Math.max(minZoom, value));
+  scheduleCanvasRender();
 }
 
 function render() {
+  if (!state.trace) {
+    renderCanvas();
+    return;
+  }
   const frame = currentFrame();
   const metrics = state.trace.metrics;
   els.completedTasks.textContent = `${frame.tasks.completed}/${metrics.total_tasks}`;
   els.droneCount.textContent = String(metrics.drones);
   els.lateTasks.textContent = String(metrics.late_tasks);
   els.simTime.textContent = frame.time_label;
-  els.frameCaption.textContent = `frame ${state.frameIndex + 1}/${state.trace.frames.length} · ${state.trace.step_seconds}s/step`;
+  els.frameCaption.textContent = `第 ${state.frameIndex + 1}/${state.trace.frames.length} 帧 · ${state.trace.step_seconds} 秒/步`;
+  els.progress.max = String(state.trace.frames.length - 1);
+  els.progress.value = String(state.frameIndex);
+  els.progressCaption.textContent = `${frame.time_label} · ${state.frameIndex + 1} / ${state.trace.frames.length} 帧`;
   els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
-  els.agentCaption.textContent = state.trace.config.coordinator;
+  els.agentCaption.textContent = `${frame.drones.length} 架无人机`;
   renderAgentTable(frame);
   renderCanvas(frame);
 }
 
 function currentFrame() {
-  return state.trace.frames[state.frameIndex];
+  return state.trace?.frames[state.frameIndex];
 }
 
 function renderAgentTable(frame) {
   els.agentTable.innerHTML = frame.drones
     .map(
-      (drone) => `
-        <tr>
-          <td>${drone.id}</td>
-          <td>${drone.status}</td>
-          <td>${drone.region_id ?? "-"}</td>
-          <td>${drone.queue.length}</td>
-          <td>${drone.completed}</td>
-          <td>${Math.round(drone.distance_m).toLocaleString()} m</td>
-        </tr>
-      `,
+      (drone) => `<tr>
+    <td>${escapeHtml(drone.id)}</td><td>${droneStatusBadge(drone.status)}</td><td>${escapeHtml(drone.region_id)}</td>
+    <td>${drone.queue?.length ?? 0}</td><td>${drone.completed}</td><td>${Math.round(drone.distance_m).toLocaleString()} m</td>
+  </tr>`,
     )
     .join("");
 }
 
-function renderCanvas(frame) {
-  const canvas = els.canvas;
-  const rect = canvas.getBoundingClientRect();
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.max(760, Math.floor(rect.width * ratio));
-  canvas.height = Math.max(460, Math.floor(rect.height * ratio));
-
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  const width = canvas.width / ratio;
-  const height = canvas.height / ratio;
-  ctx.clearRect(0, 0, width, height);
-
-  const points = [
-    ...state.trace.tasks.map((task) => ({ x: task.x, y: task.y })),
-    ...(state.trace.depots ?? []).map((depot) => ({ x: depot.x, y: depot.y })),
-    ...frame.drones.map((drone) => ({ x: drone.x, y: drone.y })),
-    state.trace.config.depot,
-  ];
-  const project = makeProjector(getBounds(points), width, height, state.zoom, state.panX, state.panY);
+function renderCanvas(frame = currentFrame()) {
+  const { ctx, width, height } = prepareCanvas(els.canvas);
   drawGrid(ctx, width, height);
+  if (!frame) {
+    ctx.fillStyle = "#a0acc2";
+    ctx.font = "13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      state.loading ? "正在加载历史轨迹" : "请选择可用的轨迹文件",
+      width / 2,
+      height / 2,
+    );
+    ctx.textAlign = "start";
+    return;
+  }
+  const bounds = state.staticBounds;
+  const points = bounds
+    ? [
+        { x: bounds.minX, y: bounds.minY },
+        { x: bounds.maxX, y: bounds.maxY },
+        ...frame.drones,
+      ]
+    : frame.drones;
+  const project = makeProjector(
+    getBounds(points),
+    width,
+    height,
+    state.zoom,
+    state.panX,
+    state.panY,
+  );
   drawDepots(ctx, project);
   drawTasks(ctx, project, frame);
   drawRoutes(ctx, project, frame);
   drawDrones(ctx, project, frame);
-  drawLegend(ctx, width, height);
-}
-
-function drawGrid(ctx, width, height) {
-  ctx.save();
-  ctx.strokeStyle = "#e7ebef";
-  for (let x = 40; x < width; x += 80) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-  for (let y = 40; y < height; y += 80) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-  }
-  ctx.restore();
 }
 
 function drawTasks(ctx, project, frame) {
   for (const task of state.trace.tasks) {
     const point = project(task);
-    const status = resolveTaskStatus(task, frame);
     ctx.beginPath();
-    if (status === "completed") ctx.fillStyle = "#c9d1d9";
-    else if (status === "assigned") ctx.fillStyle = "#f1b44c";
-    else ctx.fillStyle = "#1b8a6b";
+    ctx.fillStyle =
+      taskColors[resolveTaskStatus(task, frame)] ?? taskColors.waiting;
     ctx.arc(point.x, point.y, 3.5, 0, Math.PI * 2);
     ctx.fill();
   }
-}
-
-function resolveTaskStatus(task, frame) {
-  if (task.completed_at && task.completed_at <= frame.time_label) return "completed";
-  return frame.task_statuses?.[task.id] ?? "waiting";
 }
 
 function drawRoutes(ctx, project, frame) {
@@ -331,78 +380,13 @@ function drawDrones(ctx, project, frame) {
   }
 }
 
-function drawLegend(ctx, width, height) {
-  ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.94)";
-  ctx.strokeStyle = "#d7dde3";
-  roundRect(ctx, 18, height - 74, 250, 54, 6);
-  ctx.fill();
-  ctx.stroke();
-  const items = [
-    ["#1b8a6b", "waiting"],
-    ["#f1b44c", "assigned"],
-    ["#c9d1d9", "completed"],
-    ["#20242a", "depot"],
-  ];
-  ctx.font = "12px sans-serif";
-  for (const [index, [color, label]] of items.entries()) {
-    const x = 32 + index * 58;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    if (label === "depot") {
-      ctx.rect(x - 4, height - 54, 8, 8);
-      ctx.fill();
-    } else {
-      ctx.arc(x, height - 50, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = "#3e4650";
-    ctx.fillText(label, x - 12, height - 31);
-  }
-  ctx.restore();
-}
-
-function getBounds(points) {
-  return points.reduce(
-    (bounds, point) => ({
-      minX: Math.min(bounds.minX, point.x),
-      maxX: Math.max(bounds.maxX, point.x),
-      minY: Math.min(bounds.minY, point.y),
-      maxY: Math.max(bounds.maxY, point.y),
-    }),
-    {
-      minX: points[0].x,
-      maxX: points[0].x,
-      minY: points[0].y,
-      maxY: points[0].y,
-    },
-  );
-}
-
-function makeProjector(bounds, width, height, zoom = 1, panX = 0, panY = 0) {
-  const pad = 42;
-  const zoomOut = 0.86;
-  const xRange = bounds.maxX - bounds.minX || 1;
-  const yRange = bounds.maxY - bounds.minY || 1;
-  const scale = Math.min((width - pad * 2) / xRange, (height - pad * 2) / yRange) * zoomOut * zoom;
-  const xOffset = (width - xRange * scale) / 2;
-  const yOffset = (height - yRange * scale) / 2;
-  return (point) => ({
-    x: xOffset + (point.x - bounds.minX) * scale + panX,
-    y: height - yOffset - (point.y - bounds.minY) * scale + panY,
+function scheduleCanvasRender() {
+  els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+  if (canvasRenderRequest) return;
+  canvasRenderRequest = requestAnimationFrame(() => {
+    canvasRenderRequest = 0;
+    renderCanvas();
   });
 }
 
-function roundRect(ctx, x, y, width, height, radius) {
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.arcTo(x + width, y, x + width, y + height, radius);
-  ctx.arcTo(x + width, y + height, x, y + height, radius);
-  ctx.arcTo(x, y + height, x, y, radius);
-  ctx.arcTo(x, y, x + width, y, radius);
-  ctx.closePath();
-}
-
-init().catch((error) => {
-  document.body.innerHTML = `<pre style="padding:24px;color:#a12b2b">${error.stack}</pre>`;
-});
+init().catch(showPageError);
