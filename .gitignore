@@ -40,3 +40,6 @@ test50/
 /data/lade_llm_context_100drones_query_logs.jsonl
 /data/index_contexts.jsonl
 /data/index_query_logs.jsonl
+
+
+/logs

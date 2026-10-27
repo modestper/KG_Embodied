@@ -124,8 +124,15 @@ class TemporalKnowledgeStore:
 
     def record_step(self, step_index, time_minute, tasks, drones, completed_this_step):
         step = self.step_summary(step_index, time_minute, tasks, drones, completed_this_step)
+        return self.record_step_data(step)
+
+    def record_step_data(self, step, agent_states=None, external_agent_states=False):
         self.steps.append(step)
         return step
+
+    def record_drone_state(self, step_index, time_minute, drone):
+        # The memory backend keeps events/step summaries, not a persistent state graph.
+        pass
 
     def step_summary(self, step_index, time_minute, tasks, drones, completed_this_step):
         return {
@@ -245,6 +252,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         auto_create_indexes=False,
         index_wait_timeout_seconds=600,
         index_poll_interval_seconds=1,
+        max_connection_pool_size=None,
     ):
         super().__init__()
         self.run_id = run_id or f"run-{uuid4()}"
@@ -265,7 +273,10 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
                         "Install it with `pip install neo4j` or set KG_BACKEND=memory."
                     ) from exc
                 driver_factory = GraphDatabase.driver
-            self.driver = driver_factory(uri, auth=(user, password))
+            driver_options = {"auth": (user, password)}
+            if max_connection_pool_size is not None:
+                driver_options["max_connection_pool_size"] = max_connection_pool_size
+            self.driver = driver_factory(uri, **driver_options)
         if self.auto_create_indexes:
             try:
                 self.ensure_agent_state_indexes()
@@ -278,6 +289,24 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         normalized_time = format(float(time_minute), ".12f").rstrip("0").rstrip(".")
         task_part = task_id if task_id is not None else "-"
         return f"{self.run_id}:{event_type}:{normalized_time}:{drone_id}:{task_part}"
+
+    def ensure_writer_constraints(self):
+        """Run once in the write owner before starting concurrent actor writers."""
+        definitions = (
+            ("lade_run_id_unique", "Run", "n.id"),
+            ("lade_drone_run_id_unique", "Drone", "(n.run_id, n.id)"),
+            ("lade_task_run_id_unique", "Task", "(n.run_id, n.id)"),
+            ("lade_region_run_id_unique", "Region", "(n.run_id, n.id)"),
+            ("lade_event_run_id_unique", "Event", "(n.run_id, n.id)"),
+            ("lade_step_run_id_unique", "Step", "(n.run_id, n.id)"),
+            ("lade_agent_state_run_id_unique", "AgentState", "(n.run_id, n.id)"),
+        )
+        with self.driver.session() as session:
+            for name, label, properties in definitions:
+                session.run(
+                    f"CREATE CONSTRAINT {name} IF NOT EXISTS "
+                    f"FOR (n:{label}) REQUIRE {properties} IS UNIQUE"
+                ).consume()
 
     def ensure_agent_state_indexes(self):
         deadline = time.monotonic() + self.index_wait_timeout_seconds
@@ -441,7 +470,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         with self.driver.session() as session:
             session.run(
                 """
-                MATCH (e:Event {id: $event_id}), (run:Run {id: $run_id})
+                MATCH (e:Event {id: $event_id, run_id: $run_id}), (run:Run {id: $run_id})
                 MERGE (source:Drone {id: $source_drone_id, run_id: $run_id})
                 MERGE (source)-[:IN_RUN]->(run)
                 MERGE (e)-[:ABOUT_SOURCE_DRONE]->(source)
@@ -453,7 +482,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
             if helper_drone is not None:
                 session.run(
                     """
-                    MATCH (e:Event {id: $event_id}),
+                    MATCH (e:Event {id: $event_id, run_id: $run_id}),
                           (run:Run {id: $run_id}),
                           (source:Drone {id: $source_drone_id, run_id: $run_id}),
                           (task:Task {id: $task_id, run_id: $run_id})
@@ -496,20 +525,25 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
                 ).consume()
 
     def record_step(self, step_index, time_minute, tasks, drones, completed_this_step):
-        step = super().record_step(step_index, time_minute, tasks, drones, completed_this_step)
-        step = {"id": f"{self.run_id}-{step_index}", "run_id": self.run_id, **step}
+        step = self.step_summary(step_index, time_minute, tasks, drones, completed_this_step)
         agent_states = []
         if self.record_agent_state:
             agent_states = [
                 self.agent_state_summary(step_index, time_minute, drone)
                 for drone in drones
             ]
+        return self.record_step_data(step, agent_states)
+
+    def record_step_data(self, step, agent_states=None, external_agent_states=False):
+        super().record_step_data(step)
+        step_index = step["step_index"]
+        step = {"id": f"{self.run_id}-{step_index}", "run_id": self.run_id, **step}
         with self.driver.session() as session:
             if agent_states:
                 session.run(
                     """
                     MERGE (run:Run {id: $run_id})
-                    MERGE (s:Step {id: $step_id})
+                    MERGE (s:Step {id: $step_id, run_id: $run_id})
                     SET s = $step
                     MERGE (s)-[:IN_RUN]->(run)
                     WITH run, s
@@ -538,11 +572,25 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
                     step=step,
                     agent_states=agent_states,
                 ).consume()
+            elif external_agent_states:
+                session.run(
+                    """
+                    MERGE (run:Run {id: $run_id})
+                    MERGE (s:Step {id: $step_id, run_id: $run_id})
+                    SET s = $step
+                    MERGE (s)-[:IN_RUN]->(run)
+                    WITH s
+                    MATCH (a:AgentState {run_id: $run_id, step_index: $step_index})
+                    MERGE (a)-[:IN_STEP]->(s)
+                    """,
+                    run_id=self.run_id, step_id=step["id"], step=step,
+                    step_index=step_index,
+                ).consume()
             else:
                 session.run(
                     """
                     MERGE (run:Run {id: $run_id})
-                    MERGE (s:Step {id: $step_id})
+                    MERGE (s:Step {id: $step_id, run_id: $run_id})
                     SET s = $step
                     MERGE (s)-[:IN_RUN]->(run)
                     """,
@@ -551,6 +599,51 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
                     step=step,
                 ).consume()
         return step
+
+    def record_drone_state(self, step_index, time_minute, drone):
+        """An actor publishes its state; only the coordinator publishes Step."""
+        state = self.agent_state_summary(step_index, time_minute, drone)
+        properties = {
+            "id": drone.drone_id, "run_id": self.run_id,
+            "region_id": drone.region_id, "x": drone.x, "y": drone.y,
+            "status": drone.status, "battery_remaining_m": drone.battery_remaining_m,
+            "queue_len": len(drone.queue), "onboard_count": len(drone.onboard_tasks),
+            "total_distance_m": drone.total_distance_m,
+            "capacity": drone.capacity, "queue_capacity": drone.queue_capacity,
+            "cargo_capacity": drone.cargo_capacity,
+            "speed_m_per_minute": drone.speed_m_per_minute,
+            "battery_capacity_m": drone.battery_capacity_m,
+            "battery_range_m": drone.battery_range_m,
+            "battery_consumed_m": drone.battery_consumed_m,
+            "low_battery_threshold_m": drone.low_battery_threshold_m,
+            "safety_buffer_m": drone.safety_buffer_m,
+            "completed_count": len(drone.completed),
+            "failure_mode": drone.failure_mode, "takeover_mode": drone.takeover_mode,
+            "updated_at": time_minute,
+        }
+        with self.driver.session() as session:
+            session.run(
+                """
+                MERGE (run:Run {id: $run_id})
+                MERGE (d:Drone {id: $drone_id, run_id: $run_id})
+                SET d += $properties
+                MERGE (d)-[:IN_RUN]->(run)
+                """,
+                run_id=self.run_id, drone_id=drone.drone_id, properties=properties,
+            ).consume()
+            if self.record_agent_state:
+                session.run(
+                    """
+                    MATCH (run:Run {id: $run_id})
+                    MATCH (d:Drone {id: $drone_id, run_id: $run_id})
+                    MERGE (a:AgentState {id: $state_id, run_id: $run_id})
+                    SET a = $state
+                    MERGE (a)-[:IN_RUN]->(run)
+                    MERGE (a)-[:OF_DRONE]->(d)
+                    """,
+                    run_id=self.run_id, drone_id=drone.drone_id,
+                    state_id=state["id"], state=state,
+                ).consume()
 
     def latest_step(self):
         with self.driver.session() as session:
@@ -668,13 +761,14 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         run_props = {
             "id": self.run_id,
         }
+        shared_update = "ON CREATE SET" if getattr(self, "actor_owned", False) else "SET"
         with self.driver.session() as session:
             session.run(
+                "MERGE (run:Run {id: $run_id})\n"
+                f"{shared_update} run += $run\n"
+                "MERGE (r:Region {id: $region_id, run_id: $run_id})\n"
+                f"{shared_update} r += $region\n"
                 """
-                MERGE (run:Run {id: $run_id})
-                SET run += $run
-                MERGE (r:Region {id: $region_id, run_id: $run_id})
-                SET r += $region
                 MERGE (d:Drone {id: $drone_id, run_id: $run_id})
                 SET d += $drone
                 MERGE (t:Task {id: $task_id, run_id: $run_id})
@@ -682,7 +776,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
                 MERGE (d)-[:HOME_REGION]->(r)
                 MERGE (d)-[:CURRENTLY_IN]->(r)
                 MERGE (t)-[:BELONGS_TO]->(r)
-                MERGE (e:Event {id: $event_id})
+                MERGE (e:Event {id: $event_id, run_id: $run_id})
                 SET e = $event
                 MERGE (e)-[:ABOUT_DRONE]->(d)
                 MERGE (e)-[:ABOUT_TASK]->(t)
@@ -817,7 +911,7 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
                 MERGE (run:Run {id: $run_id})
                 MERGE (d:Drone {id: $drone_id, run_id: $run_id})
                 SET d += $drone
-                MERGE (e:Event {id: $event_id})
+                MERGE (e:Event {id: $event_id, run_id: $run_id})
                 SET e = $event
                 MERGE (e)-[:ABOUT_DRONE]->(d)
                 MERGE (d)-[:IN_RUN]->(run)

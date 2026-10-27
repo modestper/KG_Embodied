@@ -29,6 +29,7 @@ from simulation.delivery_sim import (
 )
 from simulation.planner import build_coordinator_from_env, build_planner_from_env
 from simulation.knowledge import build_knowledge_store_from_env
+from simulation.knowledge_writer import WRITE_MODES, build_delegating_store
 from simulation.graph_query import GraphQueryError, GraphQueryService, MAX_REQUEST_BYTES
 
 
@@ -131,6 +132,9 @@ def stream_simulation(env, config, depots, max_steps, frame_stride=1):
             )
         if env.is_complete():
             break
+    flush = getattr(env.knowledge_store, "flush", None)
+    if flush is not None:
+        flush()
     yield format_sse(
         "done",
         {
@@ -149,6 +153,13 @@ def llm_events(env):
 
 
 def build_runtime(args):
+    write_mode = getattr(args, "kg_write_mode", os.environ.get("KG_WRITE_MODE", "main"))
+    if write_mode not in WRITE_MODES:
+        raise ValueError(f"Unsupported KG write mode: {write_mode}")
+    if write_mode == "ray" and args.backend != "ray":
+        raise ValueError("--kg-write-mode ray requires --backend ray")
+    if write_mode != "main" and os.environ.get("KG_BACKEND", "memory").lower() not in {"neo4j", "graph"}:
+        raise ValueError("Offloaded KG writes require KG_BACKEND=neo4j")
     args.llm_log_path = str(make_llm_log_path(args)) if args.use_llm else None
     day_filter = None if args.day in ("all", "ALL", "*", "") else args.day
     delivery_file = CITY_FILES[args.city]
@@ -171,29 +182,40 @@ def build_runtime(args):
         for drone in drones:
             drone.planner = planner
         coordinator = build_coordinator_from_env()
-    knowledge_store = build_knowledge_store_from_env()
-    if args.backend == "ray":
-        from simulation.ray_delivery_sim import RaySimulationEnv
-
-        env = RaySimulationEnv(
-            tasks,
-            drones,
-            coordinator,
-            step_minutes=args.step_seconds / 60,
-            knowledge_store=knowledge_store,
-            ray_address=args.ray_address or None,
-            ray_num_cpus=args.ray_num_cpus,
-            charging_depots=list(charging_depots.values()),
-        )
+    if write_mode == "main":
+        knowledge_store = build_knowledge_store_from_env()
     else:
-        env = SimulationEnv(
-            tasks,
-            drones,
-            coordinator,
-            step_minutes=args.step_seconds / 60,
-            knowledge_store=knowledge_store,
-            charging_depots=list(charging_depots.values()),
-        )
+        ray_module = None
+        if write_mode == "ray":
+            initialize_ray_if_needed(args)
+            import ray as ray_module
+        knowledge_store = build_delegating_store(write_mode, ray_module=ray_module)
+    try:
+        if args.backend == "ray":
+            from simulation.ray_delivery_sim import RaySimulationEnv
+
+            env = RaySimulationEnv(
+                tasks,
+                drones,
+                coordinator,
+                step_minutes=args.step_seconds / 60,
+                knowledge_store=knowledge_store,
+                ray_address=args.ray_address or None,
+                ray_num_cpus=args.ray_num_cpus,
+                charging_depots=list(charging_depots.values()),
+            )
+        else:
+            env = SimulationEnv(
+                tasks,
+                drones,
+                coordinator,
+                step_minutes=args.step_seconds / 60,
+                knowledge_store=knowledge_store,
+                charging_depots=list(charging_depots.values()),
+            )
+    except Exception:
+        knowledge_store.close()
+        raise
     config = {
         "city": tasks[0].city if tasks else args.city,
         "day": args.day if day_filter is not None else "all",
@@ -215,6 +237,8 @@ def build_runtime(args):
         "backend": args.backend,
         "ray_address": args.ray_address,
         "ray_num_cpus": args.ray_num_cpus,
+        "kg_write_mode": write_mode,
+        "kg_run_id": getattr(knowledge_store, "run_id", None),
     }
     write_run_start(args.llm_log_path, config)
     return env, config, list(charging_depots.values())
@@ -433,15 +457,21 @@ class DynamicHandler(SimpleHTTPRequestHandler):
 
 def close_env(env):
     close = getattr(env, "close", None)
-    if close:
-        close()
+    try:
+        if close:
+            close()
+    finally:
+        store_close = getattr(getattr(env, "knowledge_store", None), "close", None)
+        if store_close:
+            store_close()
 
 
 def args_from_request(base_args, path):
     query = parse_qs(urlparse(path).query)
     values = vars(base_args).copy()
+    values.setdefault("kg_write_mode", os.environ.get("KG_WRITE_MODE", "main"))
 
-    for key in ("city", "day", "depot_mode", "vllm_api_base", "vllm_model", "backend", "ray_address"):
+    for key in ("city", "day", "depot_mode", "vllm_api_base", "vllm_model", "backend", "ray_address", "kg_write_mode"):
         if key in query:
             values[key] = query[key][0]
     for key in (
@@ -467,6 +497,8 @@ def args_from_request(base_args, path):
         values["depot_mode"] = base_args.depot_mode
     if values.get("backend") not in ("local", "ray"):
         values["backend"] = getattr(base_args, "backend", "local")
+    if values["kg_write_mode"] not in WRITE_MODES:
+        values["kg_write_mode"] = getattr(base_args, "kg_write_mode", "main")
     values["task_limit"] = min(values["task_limit"], 10000)
     values["drone_count"] = min(values["drone_count"], 1000)
     values["max_steps"] = min(values["max_steps"], 100000)
@@ -532,6 +564,7 @@ def parse_args():
     parser.add_argument("--vllm-model", default=os.environ.get("VLLM_MODEL", "qwen2.5-7b"))
     parser.add_argument("--llm-max-tokens", type=int, default=int(os.environ.get("LLM_MAX_TOKENS", "512")))
     parser.add_argument("--backend", choices=["local", "ray"], default="ray")
+    parser.add_argument("--kg-write-mode", choices=WRITE_MODES, default=os.environ.get("KG_WRITE_MODE", "main"))
     parser.add_argument("--ray-address", default=os.environ.get("RAY_ADDRESS", ""))
     parser.add_argument("--ray-num-cpus", type=int, default=None)
     return parser.parse_args()

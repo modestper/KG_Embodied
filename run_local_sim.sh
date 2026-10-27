@@ -14,6 +14,7 @@ MAX_STEPS=${MAX_STEPS:-1000}
 FRAME_STRIDE=${FRAME_STRIDE:-1}
 WALL_INTERVAL=${WALL_INTERVAL:-0.25}
 USE_LLM=${USE_LLM:-0}
+KG_WRITE_MODE=${KG_WRITE_MODE:-main}
 VLLM_API_BASE=${VLLM_API_BASE:-http://127.0.0.1:6666/v1}
 VLLM_MODEL=${VLLM_MODEL:-qwen2.5-7b}
 LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-512}
@@ -22,6 +23,7 @@ args=(
   --host "$HOST"
   --port "$PORT"
   --backend local
+  --kg-write-mode "$KG_WRITE_MODE"
   --city "$CITY"
   --day "$DAY"
   --task-limit "$TASK_LIMIT"

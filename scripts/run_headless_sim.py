@@ -24,6 +24,7 @@ from simulation.checkpoint import (
     validate_checkpoint,
     write_checkpoint,
 )
+from simulation.knowledge_writer import WRITE_MODES
 
 
 class StepCounter:
@@ -331,6 +332,7 @@ def run_headless(args):
             f"run_id={args.run_id} backend={config['backend']} city={config['city']} "
             f"day={config['day']} tasks={len(env.tasks)} drones={len(env.drones)} "
             f"max_steps={args.max_steps} kg_backend={args.kg_backend} "
+            f"kg_write_mode={config.get('kg_write_mode', 'main')} "
             f"record_agent_state={int(args.record_agent_state)} "
             f"checkpoint={checkpoint_path}",
             flush=True,
@@ -356,6 +358,9 @@ def run_headless(args):
         step_index = len(env.frames)
         if not args.progress_every or step_index % args.progress_every != 0:
             print_progress(env, step_index, started)
+        flush = getattr(env.knowledge_store, "flush", None)
+        if flush is not None:
+            flush()
         result = {
             "run_id": args.run_id,
             "reason": reason,
@@ -371,9 +376,11 @@ def run_headless(args):
         )
         return result
     finally:
-        if env is not None:
-            close_env(env)
-        shutdown_ray(args)
+        try:
+            if env is not None:
+                close_env(env)
+        finally:
+            shutdown_ray(args)
 
 
 def parse_args(argv=None):
@@ -396,6 +403,7 @@ def parse_args(argv=None):
     parser.add_argument("--vllm-model", default=os.environ.get("VLLM_MODEL", "qwen2.5-7b"))
     parser.add_argument("--llm-max-tokens", type=int, default=env_int("LLM_MAX_TOKENS", 512))
     parser.add_argument("--kg-backend", choices=["memory", "neo4j"], default=env_value("KG_BACKEND", "neo4j"))
+    parser.add_argument("--kg-write-mode", choices=WRITE_MODES, default=env_value("KG_WRITE_MODE", "main"))
     parser.add_argument("--run-id", default=os.environ.get("KG_RUN_ID") or f"million-headless-{datetime.now():%Y%m%d-%H%M%S}")
     parser.add_argument(
         "--record-agent-state",

@@ -14,6 +14,9 @@ from simulation.delivery_sim import (
 )
 from simulation.knowledge import TemporalKnowledgeStore
 from simulation.checkpoint import apply_task_states, task_state_payload
+from simulation.state_codec import (
+    drone_from_payload, drone_to_payload, task_from_payload, task_to_payload,
+)
 
 
 def require_ray(ray_module=None):
@@ -27,69 +30,6 @@ def require_ray(ray_module=None):
             "or run with `--backend local`."
         ) from exc
     return ray
-
-
-def task_to_payload(task):
-    return {
-        "task_id": task.task_id,
-        "city": task.city,
-        "x": task.x,
-        "y": task.y,
-        "release_minute": task.release_minute,
-        "deadline_minute": task.deadline_minute,
-        "aoi_id": task.aoi_id,
-        "region_id": task.region_id,
-        "pickup_x": task.pickup_x,
-        "pickup_y": task.pickup_y,
-        "picked_up": task.picked_up,
-        "status": task.status,
-        "assigned_to": task.assigned_to,
-        "completed_at": task.completed_at,
-        "pickup_time": task.pickup_time,
-        "onboard_drone_id": task.onboard_drone_id,
-        "assistance_reason": task.assistance_reason,
-        "assistance_requested_at": task.assistance_requested_at,
-        "assistance_source_drone_id": task.assistance_source_drone_id,
-        "handover_from_drone_id": task.handover_from_drone_id,
-        "handover_to_drone_id": task.handover_to_drone_id,
-        "handover_x": task.handover_x,
-        "handover_y": task.handover_y,
-        "handover_completed_at": task.handover_completed_at,
-        "takeover_count": task.takeover_count,
-        "previous_assignees": list(task.previous_assignees),
-    }
-
-
-def task_from_payload(payload):
-    return DeliveryTask(**payload)
-
-
-def drone_to_payload(drone):
-    return {
-        "drone_id": drone.drone_id,
-        "x": drone.x,
-        "y": drone.y,
-        "capacity": drone.capacity,
-        "queue_capacity": drone.queue_capacity,
-        "cargo_capacity": drone.cargo_capacity,
-        "speed_m_per_minute": drone.speed_m_per_minute,
-        "battery_range_m": drone.battery_range_m,
-        "battery_capacity_m": drone.battery_capacity_m,
-        "battery_remaining_m": drone.battery_remaining_m,
-        "low_battery_threshold_m": drone.low_battery_threshold_m,
-        "safety_buffer_m": drone.safety_buffer_m,
-        "queue": [task_to_payload(task) for task in drone.queue],
-        "onboard_tasks": [task_to_payload(task) for task in drone.onboard_tasks],
-        "completed": list(drone.completed),
-        "total_distance_m": drone.total_distance_m,
-        "status": drone.status,
-        "region_id": drone.region_id,
-        "home_depot": drone.home_depot,
-        "depots": list(drone.depots),
-        "target_depot": drone.target_depot,
-        "failure_mode": drone.failure_mode,
-        "takeover_mode": drone.takeover_mode,
-    }
 
 
 @dataclass
@@ -189,40 +129,44 @@ class DroneStateProxy:
 
 
 class _DroneActor:
-    def __init__(self, drone_payload):
-        payload = {
-            key: value
-            for key, value in drone_payload.items()
-            if key not in ("completed", "queue", "onboard_tasks")
-        }
-        self.drone = DroneAgent(**payload)
-        self.drone.completed = list(drone_payload.get("completed", []))
-        self.drone.queue = [
-            task_from_payload(task_payload)
-            for task_payload in drone_payload.get("queue", [])
-        ]
-        queue_by_id = {task.task_id: task for task in self.drone.queue}
-        self.drone.onboard_tasks = []
-        for task_payload in drone_payload.get("onboard_tasks", []):
-            task = queue_by_id.get(task_payload["task_id"])
-            self.drone.onboard_tasks.append(task or task_from_payload(task_payload))
+    def __init__(self, drone_payload, knowledge_config=None):
+        self.drone = drone_from_payload(drone_payload)
+        self.knowledge_store = None
+        if knowledge_config is not None:
+            from simulation.knowledge_writer import KnowledgeWriterConfig
+
+            self.knowledge_store = KnowledgeWriterConfig(**knowledge_config).build_store()
+            self.knowledge_store.actor_owned = True
 
     def snapshot(self):
         return drone_snapshot(self.drone)
 
-    def assign(self, task_payload):
+    def knowledge_status(self):
+        import os
+
+        return {
+            "pid": os.getpid(),
+            "writes_enabled": self.knowledge_store is not None,
+            "events": len(self.knowledge_store.events) if self.knowledge_store is not None else 0,
+        }
+
+    def assign(self, task_payload, now_minute=None):
         task = task_from_payload(task_payload)
         accepted = self.drone.assign(task)
+        if accepted and self.knowledge_store is not None:
+            self.knowledge_store.record_assignment(now_minute, task, self.drone)
         return {
             "accepted": accepted,
             "drone": self.snapshot(),
             "task": task_to_payload(task),
         }
 
-    def assign_assistance(self, task_payload):
-        result = self.assign(task_payload)
-        if result["accepted"]:
-            self.drone.takeover_mode = "assisting"
+    def assign_assistance(self, task_payload, now_minute=None):
+        previous_mode = self.drone.takeover_mode
+        self.drone.takeover_mode = "assisting"
+        result = self.assign(task_payload, now_minute)
+        if not result["accepted"]:
+            self.drone.takeover_mode = previous_mode
             result["drone"] = self.snapshot()
         return result
 
@@ -248,13 +192,28 @@ class _DroneActor:
         self.drone.restore_assistance_task(task, was_onboard)
         return self.snapshot()
 
-    def step(self, minutes, now_minute):
+    def step(self, minutes, now_minute, step_index=None):
         completed = self.drone.step(minutes, now_minute)
+        if self.knowledge_store is not None:
+            for event in self.drone.step_events:
+                if event["type"] == "task_picked_up":
+                    self.knowledge_store.record_pickup(now_minute, event["task"], self.drone)
+                elif event["type"] not in {"task_handover_completed", "task_taken_over"}:
+                    self.knowledge_store.record_drone_event(now_minute, event["type"], self.drone)
+            for task in completed:
+                self.knowledge_store.record_completion(now_minute, task, self.drone)
+            if step_index is not None:
+                self.knowledge_store.record_drone_state(step_index, now_minute, self.drone)
         return {
             "drone": self.snapshot(),
             "completed_tasks": [task_to_payload(task) for task in completed],
             "events": [event_to_payload(event) for event in self.drone.step_events],
         }
+
+    def close(self):
+        if self.knowledge_store is not None:
+            self.knowledge_store.close()
+            self.knowledge_store = None
 
 
 def drone_snapshot(drone):
@@ -364,6 +323,7 @@ class RaySimulationEnv:
         self.now_minute = min((task.release_minute for task in tasks), default=0)
         self.frames = []
         self.knowledge_store = knowledge_store or TemporalKnowledgeStore()
+        self.actor_knowledge_config = getattr(self.knowledge_store, "actor_config", None)
         if hasattr(self.coordinator, "knowledge_store"):
             self.coordinator.knowledge_store = self.knowledge_store
         self.depots = (
@@ -379,7 +339,11 @@ class RaySimulationEnv:
         )
         self.planner = drones[0].planner if drones else None
         self.before_step_commit = None
-        self.drones = self._sync_drones()
+        try:
+            self.drones = self._sync_drones()
+        except Exception:
+            self.close()
+            raise
 
     def _build_depot_list(self):
         depots = {}
@@ -400,7 +364,19 @@ class RaySimulationEnv:
                 drone.home_depot = by_region[drone.region_id]
 
     def close(self):
-        for actor in list(self.actors.values()):
+        actors = list(self.actors.values())
+        close_refs = []
+        for actor in actors:
+            try:
+                close_refs.append(actor.close.remote())
+            except Exception:
+                pass
+        if close_refs:
+            try:
+                self.ray.get(close_refs, timeout=5)
+            except Exception:
+                pass
+        for actor in actors:
             try:
                 self.ray.kill(actor, no_restart=True)
             except Exception:  # A dead actor is already closed.
@@ -409,7 +385,7 @@ class RaySimulationEnv:
 
     def _create_actors(self, drone_payloads):
         return {
-            payload["drone_id"]: self.actor_class.remote(payload)
+            payload["drone_id"]: self.actor_class.remote(payload, self.actor_knowledge_config)
             for payload in drone_payloads
         }
 
@@ -469,7 +445,8 @@ class RaySimulationEnv:
         self.release_and_assign()
         next_time = self.now_minute + self.step_minutes
         results = self.ray.get(
-            [actor.step.remote(self.step_minutes, next_time) for actor in self.actors.values()]
+            [actor.step.remote(self.step_minutes, next_time, len(self.frames) + 1)
+             for actor in self.actors.values()]
         )
         completed_this_step = []
         drone_snapshots = []
@@ -486,6 +463,10 @@ class RaySimulationEnv:
         frame = self.snapshot(completed_this_step)
         self.frames.append(frame)
         if self.before_step_commit is not None:
+            flush = getattr(self.knowledge_store, "flush", None)
+            if flush is not None:
+                # Keep the durable checkpoint at most one Step ahead of Neo4j.
+                flush()
             self.before_step_commit(self, len(self.frames), completed_this_step)
         self.knowledge_store.record_step(
             len(self.frames),
@@ -517,6 +498,9 @@ class RaySimulationEnv:
                 self.knowledge_store.record_drone_event(time_minute, event_type, drone)
 
     def release_and_assign(self):
+        if self.actor_knowledge_config is not None:
+            # Coordinator writes must not trail a later actor mutation of Task.
+            self.knowledge_store.flush()
         self._sync_drones()
         self.coordinate_assistance()
         available = [
@@ -608,7 +592,7 @@ class RaySimulationEnv:
             now_minute=self.now_minute,
         )
         result = self.ray.get(
-            helper_actor.assign_assistance.remote(task_to_payload(task))
+            helper_actor.assign_assistance.remote(task_to_payload(task), self.now_minute)
         )
         helper_after = self._replace_drone_from_snapshot(result["drone"])
         if not result.get("accepted"):
@@ -641,10 +625,14 @@ class RaySimulationEnv:
                 reason=reason,
             )
         if release["previous_status"] != "returning" and source_after.status == "returning":
-            self.knowledge_store.record_drone_event(
+            record_event = getattr(
+                self.knowledge_store, "record_coordinator_drone_event",
+                self.knowledge_store.record_drone_event,
+            )
+            record_event(
                 self.now_minute, "drone_low_battery", source_after
             )
-            self.knowledge_store.record_drone_event(
+            record_event(
                 self.now_minute, "drone_returning_to_charge", source_after
             )
         return True
@@ -661,7 +649,7 @@ class RaySimulationEnv:
                 rejected.add(drone.drone_id)
                 continue
 
-            result = self.ray.get(actor.assign.remote(task_to_payload(task)))
+            result = self.ray.get(actor.assign.remote(task_to_payload(task), self.now_minute))
             self._replace_drone_from_snapshot(result["drone"])
             if result.get("accepted"):
                 self._apply_assigned_task(result["task"])

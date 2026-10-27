@@ -101,7 +101,72 @@ Neo4j KG 会记录任务派单和完成事件，并为 LLM/KG 查询提供 `rece
 
 启用 `KG_RECORD_AGENT_STATE=1` 时，仿真启动阶段默认检查三组 `AgentState` 复合索引。已有相同标签和属性定义的 RANGE 索引会直接复用；缺失时创建并等待索引变为 `ONLINE`，随后才开始 step 写入。后续新增的状态节点由 Neo4j 自动增量维护索引。设置 `KG_AUTO_CREATE_INDEXES=0` 可以关闭该行为；首次对已有大规模数据建索引时，可用 `KG_INDEX_WAIT_TIMEOUT_SECONDS` 调整启动等待上限。
 
-### 5. 仿真约束
+### 5. 切换知识图谱写入位置
+
+动态服务和 headless 入口支持 `--kg-write-mode main|ray|process`，启动脚本对应环境变量为 `KG_WRITE_MODE`：
+
+| 模式 | 写入执行位置 | 适用执行后端 |
+|---|---|---|
+| `main` | 主进程，保持原实现，默认值 | local / ray |
+| `ray` | 无人机 actor 写本机派单、取货、完成、运行事件与状态；专门的 Ray 写入 actor 写互助协调记录、全局 Step 和快照关联 | ray |
+| `process` | 独立 Python 子进程按 FIFO 队列接管全部 KG 写入 | local / ray |
+
+两个新模式均要求 `KG_BACKEND=neo4j`。主进程保留图查询、调度、仿真编排和页面数据；数据库写入在对应写入进程中执行。每次运行共用同一个 run ID，不在 actor 之间传递数据库 Driver。
+
+多节点 Ray 集群中，`NEO4J_URI` 必须能从所有写入 actor 所在节点访问；`127.0.0.1` 仅适合数据库与这些进程位于同一台机器的情况。
+
+先配置现有的 `NEO4J_URI`、`NEO4J_USER`、`NEO4J_PASSWORD`，再分别启动。以下命令是两次独立运行，使用不同 run ID：
+
+```bash
+# 版本一：Ray 侧写入
+KG_BACKEND=neo4j KG_RECORD_AGENT_STATE=1 \
+KG_RUN_ID=writer-ray-demo KG_WRITE_MODE=ray \
+./run_in_lade.sh bash run_ray_sim.sh
+
+# 版本二：独立副程序写入
+KG_BACKEND=neo4j KG_RECORD_AGENT_STATE=1 \
+KG_RUN_ID=writer-process-demo KG_WRITE_MODE=process \
+./run_in_lade.sh bash run_ray_sim.sh
+```
+
+也可以直接传命令行参数，例如：
+
+```bash
+KG_BACKEND=neo4j KG_RUN_ID=writer-ray-cli \
+./run_in_lade.sh python scripts/run_dynamic_sim.py --backend ray --kg-write-mode ray
+
+./run_in_lade.sh python scripts/run_headless_sim.py \
+  --backend ray --kg-backend neo4j --kg-write-mode process \
+  --run-id writer-process-headless
+```
+
+`process` 的副程序由主程序自动启动、确认就绪和关闭，无需手动运行 `simulation.knowledge_worker`。写入队列有上限；错误会回传，正常结束、关闭与需要读取已提交数据时会等待写入确认。headless 保存下一检查点前也会排空先前写入，保持现有“检查点最多领先数据库一个 Step”的恢复条件。
+
+`ray` 模式下，各无人机的局部写入在其 actor 方法返回前完成；跨无人机互助记录由专门写入 actor 确认顺序，全局 Step 在本轮全部结果返回且检查点钩子完成后提交。无人机自己不会发布全局 Step。
+
+新模式会在写入端初始化阶段检查/创建实体唯一约束，并按原配置初始化 AgentState 索引。如果现有库包含重复身份数据，启动会报错，不会自动删除或合并数据。`KG_AUTO_CREATE_INDEXES` 控制原有 AgentState 查询索引检查，唯一约束仍是新写入模式的初始化要求。建议先在隔离数据库或新的实验 run 验证。
+
+这次切换的是 **KG 写入位置**，现有同步时间步与 Ray 快照获取仍然保留；它不自动把任务规划改为读取上一轮数据库快照的异步流水线，也未改变电量接单规则。
+
+新增验证：
+
+```bash
+./run_in_lade.sh python -m unittest -v tests.knowledge_writer_test
+
+# 启动独立的两 CPU 临时 Ray 集群；结束后关闭，不连接已有集群。
+LADE_KG_RAY_INTEGRATION=1 ./run_in_lade.sh python -m unittest -v \
+  tests.knowledge_writer_integration_test.KnowledgeWriterRayIntegrationTest
+
+# 仅对隔离 Neo4j 测试库启用：会建约束，创建并清理自身 UUID run。
+LADE_KG_WRITER_INTEGRATION_URI=bolt://127.0.0.1:7687 \
+LADE_KG_WRITER_INTEGRATION_WRITE=1 \
+./run_in_lade.sh python -m unittest -v \
+  tests.knowledge_writer_integration_test.KnowledgeWriterNeo4jIntegrationTest
+```
+
+headless 的检查点能力仍以 Ray 后端为主；`process` 支持 local 指动态本地仿真入口。
+
+### 6. 仿真约束
 
 无人机默认电池容量为 `60_000m`，固定低电阈值为 `12_000m`，安全余量为 `5_000m`。每飞行 1 米消耗 1 米电量；接单前会检查“当前位置到取货点 + 取货点到送达点 + 送达点返回最近城市 depot + 安全余量”的电量需求。实际返航阈值为 `max(12_000m, 当前位置到最近城市 depot 的距离 + 5_000m)`；触发后锁定该最近 depot，抵达后立即充满。每架无人机的充电候选包含该城市固定表中的全部 depot，而不是仅包含当前任务样本涉及的区域。
 
@@ -170,6 +235,7 @@ CITY=Jilin DAY=0925 TASK_LIMIT=100 DRONE_COUNT=10 RAY_NUM_CPUS=10 ./run_ray_sim.
 | `RAY_ADDRESS` | 空 | Ray 集群地址，常用 `auto` |
 | `RAY_NUM_CPUS` | 空 | Ray 本地 runtime 可用 CPU 数 |
 | `KG_BACKEND` | `memory` | 知识图谱后端，支持 `memory` / `neo4j` |
+| `KG_WRITE_MODE` | `main` | 写入位置：`main` / `ray` / `process`，后两者要求 Neo4j，`ray` 还要求 Ray 执行后端 |
 | `KG_RUN_ID` | 自动生成 | Neo4j 单次实验运行 ID，用于隔离不同 run 的图谱数据 |
 | `KG_RECORD_AGENT_STATE` | `0` | 是否在 Neo4j 中记录每个 step 下每个 drone 的 `AgentState` 快照，设置为 `1` 时开启 |
 | `KG_AUTO_CREATE_INDEXES` | `1` | 记录 `AgentState` 时是否在启动阶段检查、创建并等待查询索引 `ONLINE` |
