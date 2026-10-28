@@ -117,7 +117,7 @@ class KnowledgeWriteExecutor:
             args[3] = drone_from_payload(args[3])
             if kwargs.get("helper_drone") is not None:
                 kwargs["helper_drone"] = drone_from_payload(kwargs["helper_drone"])
-        elif method != "record_step_data":
+        elif method not in {"record_step_data", "ensure_runtime_state_schema", "publish_runtime_states"}:
             raise ValueError(f"Unsupported knowledge write: {method}")
         getattr(self.store, method)(*args, **kwargs)
 
@@ -414,6 +414,17 @@ class DelegatingKnowledgeStore(TemporalKnowledgeStore):
 
     def flush(self):
         self.writer.flush()
+
+    def ensure_runtime_state_schema(self):
+        self.writer.submit({"method": "ensure_runtime_state_schema"})
+        self.flush()
+
+    def publish_runtime_states(self, context, states):
+        self.writer.submit({"method": "publish_runtime_states", "args": [context, states]})
+
+    def query_runtime_states(self, execution_id, expected_versions):
+        self.flush()
+        return self.reader.query_runtime_states(execution_id, expected_versions)
 
     def query_region_context(self, *args, **kwargs):
         self.flush()

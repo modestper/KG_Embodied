@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1320" viewBox="0 0 1500 1320" role="img" aria-labelledby="title desc">
+  <title id="title">LaDe 无人机配送仿真：运行逻辑与进程职责</title>
+  <desc id="desc">按 2026 年 10 月 28 日工作区代码绘制。主图采用 Ray 仿真和 Ray 分担图谱写入模式。主进程统一读取状态、派单、发起无人机并行执行、等待结果并汇总。各无人机维护自己的状态，产生并写入本机事件。专用写入 actor 保存全局记录。调度状态可从 Ray 或 Neo4j 获取。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L9,4.5 L0,9 Z" fill="#475569"/></marker>
+    <marker id="greenArrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L9,4.5 L0,9 Z" fill="#16806b"/></marker>
+    <style>
+      text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #172b45; }
+      .title { font-size: 31px; font-weight: 700; }
+      .subtitle { font-size: 18px; fill: #52647b; }
+      .group { font-size: 25px; font-weight: 700; }
+      .heading { font-size: 22px; font-weight: 700; }
+      .body { font-size: 19px; }
+      .small { font-size: 17px; fill: #52647b; }
+      .label { font-size: 17px; fill: #334155; paint-order: stroke; stroke: #fff; stroke-width: 6px; stroke-linejoin: round; }
+      .flow { fill: none; stroke: #475569; stroke-width: 2.5; marker-end: url(#arrow); }
+      .dbflow { fill: none; stroke: #16806b; stroke-width: 2.5; marker-end: url(#greenArrow); }
+      .optional { stroke-dasharray: 7 5; }
+      .inside { fill: none; stroke: #93a6bd; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1500" height="1320" fill="#ffffff"/>
+  <text x="55" y="51" class="title">LaDe 无人机配送仿真 · 当前运行逻辑</text>
+  <text x="55" y="85" class="subtitle">代码核对：2026-10-28 ｜ 主图：backend=ray、KG_WRITE_MODE=ray ｜ 调度状态来源：Ray / Neo4j 二选一</text>
+
+  <rect x="55" y="120" width="1380" height="95" rx="16" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="85" y="159" class="group">网页端</text>
+  <text x="85" y="191" class="body">提交城市 / 任务数 / 无人机数等参数；接收 SSE 数据，展示地图、轨迹、指标与事件，支持本地回放</text>
+
+  <rect x="55" y="285" width="575" height="800" rx="18" fill="#eff6ff" stroke="#83afe9" stroke-width="2"/>
+  <text x="90" y="328" class="group">主进程：统一调度与仿真时钟</text>
+  <text x="90" y="354" class="small">HTTP 请求线程运行 RaySimulationEnv</text>
+
+  <g>
+    <rect x="100" y="374" width="495" height="70" rx="10" fill="#fff" stroke="#b9d3f3"/>
+    <text x="120" y="403" class="heading">启动：加载任务，创建实验与 actor</text>
+    <text x="120" y="430" class="small">CSV → 任务目录 / 充电站 / run_id / 配置</text>
+
+    <rect x="100" y="465" width="495" height="80" rx="10" fill="#fff" stroke="#b9d3f3"/>
+    <text x="120" y="497" class="heading">① 读取无人机状态，形成规划代理</text>
+    <text x="120" y="526" class="small">Ray 快照，或 Neo4j 完整版本快照</text>
+
+    <rect x="100" y="565" width="495" height="80" rx="10" fill="#fff" stroke="#b9d3f3"/>
+    <text x="120" y="597" class="heading">② 筛选到期任务，协调协助与派单</text>
+    <text x="120" y="626" class="small">规则 / 拍卖评分；可选调用外部 LLM 服务</text>
+
+    <rect x="100" y="665" width="495" height="80" rx="10" fill="#fff" stroke="#b9d3f3"/>
+    <text x="120" y="697" class="heading">③ 确认接单，向全部无人机发送 step</text>
+    <text x="120" y="726" class="small">指定相同的时间增量与下一步仿真时间</text>
+
+    <rect x="100" y="765" width="495" height="80" rx="10" fill="#fff" stroke="#b9d3f3"/>
+    <text x="120" y="797" class="heading">④ 等待各机本时间步返回，再汇总</text>
+    <text x="120" y="826" class="small">配送可未完成；交回任务进度 / 状态 / 事件</text>
+
+    <rect x="100" y="865" width="495" height="100" rx="10" fill="#fff" stroke="#b9d3f3"/>
+    <text x="120" y="897" class="heading">⑤ 更新时间，生成全局 Step 和页面帧</text>
+    <text x="120" y="926" class="small">提交全局写入；维护页面事件与统计</text>
+    <text x="120" y="952" class="small">推送 SSE；检查完成条件 / 最大步数</text>
+  </g>
+  <path d="M348 444 V465" class="inside"/>
+  <path d="M348 545 V565" class="inside"/>
+  <path d="M348 645 V665" class="inside"/>
+  <path d="M348 745 V765" class="inside"/>
+  <path d="M348 845 V865" class="inside"/>
+  <path d="M100 915 H77 V505 H100" class="inside"/>
+  <text x="100" y="1010" class="body">回到① → 检查新到期任务，可追加派单</text>
+  <text x="100" y="1042" class="small">结束 → 等待剩余写入完成，返回 done，清理资源</text>
+
+  <rect x="785" y="285" width="650" height="570" rx="18" fill="#ecfdf5" stroke="#6bbfa3" stroke-width="2"/>
+  <text x="815" y="328" class="group">无人机 actor 工作进程 × N</text>
+  <text x="815" y="357" class="small">每架一个 _DroneActor，内部持有一个 DroneAgent</text>
+  <rect x="815" y="381" width="590" height="294" rx="12" fill="#fff" stroke="#b4ddce"/>
+  <text x="840" y="415" class="heading">每架无人机负责自己的执行与状态</text>
+  <text x="840" y="456" class="body">• 保存位置、电量、队列、载货与故障状态</text>
+  <text x="840" y="495" class="body">• 配送中可追加接单，保存到本机任务队列</text>
+  <text x="840" y="534" class="body">• 按本步预算移动、取货、配送、返航 / 充电</text>
+  <text x="840" y="573" class="body">• 产生取货、完成、低电、返航等本机事件</text>
+  <text x="840" y="612" class="body">• 直接写入本机事件；按配置写 AgentState</text>
+  <text x="840" y="651" class="small">本框中的直接图谱写入适用于 KG_WRITE_MODE=ray</text>
+  <text x="815" y="711" class="body">收到 step 后并行执行；直接写入完成后才返回</text>
+  <text x="815" y="752" class="body">state_source=ray：返回状态快照与事件</text>
+  <text x="815" y="786" class="body">state_source=neo4j：发布版本快照，再返回回执</text>
+  <text x="815" y="827" class="small">无人机之间的任务协助由主进程协调</text>
+
+  <rect x="785" y="925" width="650" height="160" rx="16" fill="#fff7ed" stroke="#e8ac64" stroke-width="2"/>
+  <text x="815" y="964" class="group">全局知识记录写入进程（1 个）</text>
+  <text x="815" y="996" class="small">_KnowledgeWriterActor：不执行配送，不决定派单</text>
+  <text x="815" y="1028" class="body">启动时建立约束；写全局 Step、跨机协助等记录</text>
+  <text x="815" y="1060" class="small">提交可排队；flush / 读取前同步 / 结束时等待完成</text>
+
+  <rect x="55" y="1160" width="1380" height="105" rx="17" fill="#f0fdfa" stroke="#70bdb0" stroke-width="2"/>
+  <text x="85" y="1201" class="group">Neo4j 独立数据库服务</text>
+  <text x="85" y="1238" class="body">实验、任务、无人机、事件、全局 Step、历史 AgentState；可选保存 DroneRuntimeState 调度快照</text>
+
+  <path d="M200 215 V285" class="flow"/>
+  <text x="105" y="257" class="label">启动参数</text>
+  <path d="M540 285 V215" class="flow"/>
+  <text x="430" y="257" class="label">SSE 页面帧</text>
+  <path d="M630 705 H785" class="flow"/>
+  <text x="650" y="691" class="label">派单 / step</text>
+  <path d="M785 805 H630" class="flow"/>
+  <text x="650" y="790" class="label">结果 / 回执</text>
+  <path d="M785 405 H700 V505 H630" class="flow optional"/>
+  <text x="662" y="390" class="label">可选 Ray 快照</text>
+  <path d="M630 1005 H785" class="flow"/>
+  <text x="650" y="990" class="label">全局记录</text>
+  <path d="M1090 1085 V1160" class="dbflow"/>
+  <text x="1110" y="1130" class="label">全局记录入库</text>
+  <path d="M1435 570 H1468 V1210 H1435" class="dbflow"/>
+  <text x="1456" y="772" class="small" transform="rotate(90 1456 772)">本机写入；Neo4j 模式另发布调度快照</text>
+  <path d="M190 1160 V1085" class="dbflow optional"/>
+  <text x="215" y="1125" class="label">可选：读取 Neo4j 预期版本快照</text>
+
+  <text x="55" y="1300" class="small">一个时间步只推进一段仿真时间（如 20 秒），不要求送完订单；每步重新检查派单。Ray 另有基础设施进程。</text>
+</svg>

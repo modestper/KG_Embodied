@@ -138,7 +138,7 @@ async function loadSelectedTrace() {
     els.scenarioTitle.textContent = `${city} · 轨迹回放`;
     els.scenarioCaption.textContent = `${config.day || entry?.day || "全部日期"} · ${trace.metrics.total_tasks} 个任务 · ${trace.metrics.drones} 架无人机 · ${trace.frames.length.toLocaleString()} 帧`;
     els.fileInfo.textContent = `${size}已加载 ${trace.frames.length.toLocaleString()} 帧`;
-    document.title = `${city}轨迹回放 · LaDe 配送实验室`;
+    document.title = `${city}轨迹回放 · LaDe 配送模拟`;
     resetView();
   } catch (error) {
     if (sequence !== state.loadSequence || error.name === "AbortError") return;

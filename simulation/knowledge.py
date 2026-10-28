@@ -290,6 +290,56 @@ class Neo4jKnowledgeStore(TemporalKnowledgeStore):
         task_part = task_id if task_id is not None else "-"
         return f"{self.run_id}:{event_type}:{normalized_time}:{drone_id}:{task_part}"
 
+    def ensure_runtime_state_schema(self):
+        # A new label avoids imposing new constraints on historical data.
+        with self.driver.session() as session:
+            session.run(
+                "CREATE CONSTRAINT lade_drone_runtime_state_unique IF NOT EXISTS "
+                "FOR (n:DroneRuntimeState) "
+                "REQUIRE (n.run_id, n.execution_id, n.drone_id) IS UNIQUE"
+            ).consume()
+
+    def publish_runtime_states(self, context, states):
+        from simulation.knowledge_state import SCHEMA_VERSION, encode_runtime_states
+
+        with self.driver.session() as session:
+            session.run(
+                """
+                UNWIND $states AS state
+                MERGE (s:DroneRuntimeState {
+                    run_id: $run_id, execution_id: $execution_id,
+                    drone_id: state.drone_id
+                })
+                WITH s, state
+                WHERE s.version IS NULL OR s.version <= $version
+                SET s += state, s.version = $version,
+                    s.schema_version = $schema_version,
+                    s.step_index = $step_index, s.time_minute = $time_minute,
+                    s.updated_at = datetime()
+                """,
+                run_id=self.run_id, schema_version=SCHEMA_VERSION,
+                states=encode_runtime_states(states), **context,
+            ).consume()
+
+    def query_runtime_states(self, execution_id, expected_versions):
+        from simulation.knowledge_state import decode_runtime_states
+
+        with self.driver.session(default_access_mode="READ") as session:
+            rows = session.run(
+                """
+                UNWIND $drone_ids AS drone_id
+                MATCH (s:DroneRuntimeState {
+                    run_id: $run_id, execution_id: $execution_id, drone_id: drone_id
+                })
+                RETURN s.drone_id AS drone_id, s.execution_id AS execution_id,
+                       s.version AS version, s.schema_version AS schema_version,
+                       s.payload_json AS payload_json
+                """,
+                run_id=self.run_id, execution_id=execution_id,
+                drone_ids=list(expected_versions),
+            ).data()
+        return decode_runtime_states(rows, execution_id, expected_versions)
+
     def ensure_writer_constraints(self):
         """Run once in the write owner before starting concurrent actor writers."""
         definitions = (

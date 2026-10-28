@@ -25,6 +25,7 @@ from simulation.checkpoint import (
     write_checkpoint,
 )
 from simulation.knowledge_writer import WRITE_MODES
+from simulation.knowledge_state import STATE_SOURCES
 
 
 class StepCounter:
@@ -333,6 +334,7 @@ def run_headless(args):
             f"day={config['day']} tasks={len(env.tasks)} drones={len(env.drones)} "
             f"max_steps={args.max_steps} kg_backend={args.kg_backend} "
             f"kg_write_mode={config.get('kg_write_mode', 'main')} "
+            f"state_source={config.get('state_source', 'ray')} "
             f"record_agent_state={int(args.record_agent_state)} "
             f"checkpoint={checkpoint_path}",
             flush=True,
@@ -404,6 +406,7 @@ def parse_args(argv=None):
     parser.add_argument("--llm-max-tokens", type=int, default=env_int("LLM_MAX_TOKENS", 512))
     parser.add_argument("--kg-backend", choices=["memory", "neo4j"], default=env_value("KG_BACKEND", "neo4j"))
     parser.add_argument("--kg-write-mode", choices=WRITE_MODES, default=env_value("KG_WRITE_MODE", "main"))
+    parser.add_argument("--state-source", choices=STATE_SOURCES, default=env_value("KG_STATE_SOURCE", "ray"))
     parser.add_argument("--run-id", default=os.environ.get("KG_RUN_ID") or f"million-headless-{datetime.now():%Y%m%d-%H%M%S}")
     parser.add_argument(
         "--record-agent-state",

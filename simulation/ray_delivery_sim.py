@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from uuid import uuid4
 
 from simulation.delivery_sim import (
     DeliveryTask,
@@ -13,6 +14,7 @@ from simulation.delivery_sim import (
     task_counts,
 )
 from simulation.knowledge import TemporalKnowledgeStore
+from simulation.knowledge_state import KnowledgeStateError, STATE_SOURCES, runtime_state
 from simulation.checkpoint import apply_task_states, task_state_payload
 from simulation.state_codec import (
     drone_from_payload, drone_to_payload, task_from_payload, task_to_payload,
@@ -150,49 +152,79 @@ class _DroneActor:
             "events": len(self.knowledge_store.events) if self.knowledge_store is not None else 0,
         }
 
-    def assign(self, task_payload, now_minute=None):
+    def _runtime_result(self, result, state_context, extra_tasks=()):
+        if state_context is not None:
+            snapshot = dict(result.get("drone", result))
+            state = runtime_state(snapshot, extra_tasks)
+            if self.knowledge_store is not None:
+                self.knowledge_store.publish_runtime_states(state_context, [state])
+                # Neo4j is the data path; Ray only returns control acknowledgments
+                # and event identities after the actor's write has committed.
+                if "drone" not in result:
+                    return {"drone_id": snapshot["drone_id"]}
+                result["drone"] = {"drone_id": snapshot["drone_id"]}
+                if "task" in result:
+                    result["task"] = {"task_id": result["task"]["task_id"]}
+                if "completed_tasks" in result:
+                    result["completed_tasks"] = [
+                        {"task_id": task["task_id"]} for task in result["completed_tasks"]
+                    ]
+                for event in result.get("events", []):
+                    if "task" in event:
+                        event["task"] = {"task_id": event["task"]["task_id"]}
+            else:
+                # The main process relays this immutable payload to the writer;
+                # planning will use the subsequent Neo4j read, not this payload.
+                result["_runtime_state"] = state
+        return result
+
+    def assign(self, task_payload, now_minute=None, state_context=None):
         task = task_from_payload(task_payload)
         accepted = self.drone.assign(task)
         if accepted and self.knowledge_store is not None:
             self.knowledge_store.record_assignment(now_minute, task, self.drone)
-        return {
+        return self._runtime_result({
             "accepted": accepted,
-            "drone": self.snapshot(),
+            "drone": drone_snapshot(self.drone),
             "task": task_to_payload(task),
-        }
+        }, state_context, [task_to_payload(task)] if accepted else [])
 
-    def assign_assistance(self, task_payload, now_minute=None):
+    def assign_assistance(self, task_payload, now_minute=None, state_context=None):
         previous_mode = self.drone.takeover_mode
         self.drone.takeover_mode = "assisting"
         result = self.assign(task_payload, now_minute)
         if not result["accepted"]:
             self.drone.takeover_mode = previous_mode
-            result["drone"] = self.snapshot()
-        return result
+            result["drone"] = drone_snapshot(self.drone)
+        return self._runtime_result(
+            result, state_context, [result["task"]] if result["accepted"] else [],
+        )
 
-    def release_task_for_assistance(self, task_id):
+    def release_task_for_assistance(self, task_id, state_context=None):
         task = next((item for item in self.drone.queue if item.task_id == task_id), None)
         if task is None:
-            return {"released": False, "drone": self.snapshot()}
+            return self._runtime_result(
+                {"released": False, "drone": drone_snapshot(self.drone)}, state_context,
+            )
         if self.drone.failure_mode and self.drone.status != "failed":
             self.drone.mark_failed(self.drone.failure_mode)
         payload = task_to_payload(task)
         previous_status = self.drone.status
         was_onboard = self.drone.detach_task_for_assistance(task)
-        return {
+        return self._runtime_result({
             "released": True,
             "task": payload,
             "was_onboard": was_onboard,
             "previous_status": previous_status,
-            "drone": self.snapshot(),
-        }
+            "drone": drone_snapshot(self.drone),
+        }, state_context, [payload])
 
-    def restore_task_after_assistance(self, task_payload, was_onboard):
+    def restore_task_after_assistance(self, task_payload, was_onboard, state_context=None):
         task = task_from_payload(task_payload)
         self.drone.restore_assistance_task(task, was_onboard)
-        return self.snapshot()
+        return self._runtime_result(drone_snapshot(self.drone), state_context)
 
-    def step(self, minutes, now_minute, step_index=None):
+    def step(self, minutes, now_minute, step_index=None, state_context=None):
         completed = self.drone.step(minutes, now_minute)
         if self.knowledge_store is not None:
             for event in self.drone.step_events:
@@ -204,11 +236,11 @@ class _DroneActor:
                 self.knowledge_store.record_completion(now_minute, task, self.drone)
             if step_index is not None:
                 self.knowledge_store.record_drone_state(step_index, now_minute, self.drone)
-        return {
-            "drone": self.snapshot(),
+        return self._runtime_result({
+            "drone": drone_snapshot(self.drone),
             "completed_tasks": [task_to_payload(task) for task in completed],
             "events": [event_to_payload(event) for event in self.drone.step_events],
-        }
+        }, state_context, [task_to_payload(task) for task in completed])
 
     def close(self):
         if self.knowledge_store is not None:
@@ -307,7 +339,13 @@ class RaySimulationEnv:
         ray_address=None,
         ray_num_cpus=None,
         charging_depots=None,
+        state_source="ray",
     ):
+        if state_source not in STATE_SOURCES:
+            raise ValueError(f"Unsupported state source: {state_source}")
+        if state_source == "neo4j" and not callable(getattr(knowledge_store, "query_runtime_states", None)):
+            raise ValueError("Neo4j state source requires a Neo4j knowledge store")
+        self.state_source = state_source
         self.ray = require_ray(ray_module)
         if not self.ray.is_initialized():
             init_kwargs = {}
@@ -340,6 +378,8 @@ class RaySimulationEnv:
         self.planner = drones[0].planner if drones else None
         self.before_step_commit = None
         try:
+            if self.state_source == "neo4j":
+                self._initialize_graph_state([drone_snapshot(drone) for drone in drones])
             self.drones = self._sync_drones()
         except Exception:
             self.close()
@@ -412,6 +452,10 @@ class RaySimulationEnv:
         self.close()
         self.actors = self._create_actors(drone_payloads)
         self.now_minute = state["now_minute"]
+        if self.state_source == "neo4j":
+            self._initialize_graph_state([
+                drone_snapshot(drone_from_payload(payload)) for payload in drone_payloads
+            ])
         self._sync_drones()
 
         restored_task_states = {
@@ -429,8 +473,67 @@ class RaySimulationEnv:
                         setattr(task, field, value)
         return self.drones
 
+    def _initialize_graph_state(self, snapshots):
+        self.execution_id = str(uuid4())
+        self._state_sequence = 0
+        self._expected_versions = {snapshot["drone_id"]: 0 for snapshot in snapshots}
+        self._graph_task_updates = {}
+        self.knowledge_store.ensure_runtime_state_schema()
+        self.knowledge_store.publish_runtime_states(
+            self._state_context(0), [runtime_state(snapshot) for snapshot in snapshots],
+        )
+        self._flush_graph_writes()
+
+    def _state_context(self, version, time_minute=None, step_index=None):
+        return {
+            "execution_id": self.execution_id, "version": version,
+            "step_index": len(self.frames) if step_index is None else step_index,
+            "time_minute": self.now_minute if time_minute is None else time_minute,
+        }
+
+    def _next_state_context(self, drone_ids, **kwargs):
+        self._state_sequence += 1
+        for drone_id in drone_ids:
+            self._expected_versions[drone_id] = self._state_sequence
+        return self._state_context(self._state_sequence, **kwargs)
+
+    def _flush_graph_writes(self):
+        flush = getattr(self.knowledge_store, "flush", None)
+        if flush is not None:
+            flush()
+
+    def _persist_actor_results(self, results, context):
+        if self.actor_knowledge_config is None:
+            states = [result.pop("_runtime_state") for result in results]
+            self.knowledge_store.publish_runtime_states(context, states)
+        self._flush_graph_writes()
+
+    def _call_actor(self, drone_id, method, *args):
+        remote_method = getattr(self.actors[drone_id], method)
+        if self.state_source == "ray":
+            return self.ray.get(remote_method.remote(*args))
+        context = self._next_state_context([drone_id])
+        result = self.ray.get(remote_method.remote(*args, state_context=context))
+        self._persist_actor_results([result], context)
+        self._sync_drones()
+        return result
+
     def _sync_drones(self):
-        snapshots = self.ray.get([actor.snapshot.remote() for actor in self.actors.values()])
+        if self.state_source == "neo4j":
+            states = self.knowledge_store.query_runtime_states(
+                self.execution_id, self._expected_versions,
+            )
+            snapshots = []
+            for drone_id in self.actors:
+                state = states[drone_id]
+                snapshots.append(state["snapshot"])
+                version = self._expected_versions[drone_id]
+                for task in state["task_updates"]:
+                    previous = self._graph_task_updates.get(task["task_id"])
+                    if previous is None or version > previous[0]:
+                        self._graph_task_updates[task["task_id"]] = (version, task)
+        else:
+            snapshots = self.ray.get([actor.snapshot.remote() for actor in self.actors.values()])
         self.drones = [proxy_from_snapshot(snapshot, self.planner) for snapshot in snapshots]
         return self.drones
 
@@ -444,22 +547,33 @@ class RaySimulationEnv:
     def step_once(self):
         self.release_and_assign()
         next_time = self.now_minute + self.step_minutes
+        state_kwargs = {}
+        if self.state_source == "neo4j":
+            state_kwargs["state_context"] = self._next_state_context(
+                self.actors, time_minute=next_time, step_index=len(self.frames) + 1,
+            )
         results = self.ray.get(
-            [actor.step.remote(self.step_minutes, next_time, len(self.frames) + 1)
+            [actor.step.remote(self.step_minutes, next_time, len(self.frames) + 1, **state_kwargs)
              for actor in self.actors.values()]
         )
+        if self.state_source == "neo4j":
+            self._persist_actor_results(results, state_kwargs["state_context"])
+            self._sync_drones()
         completed_this_step = []
         drone_snapshots = []
         for result in results:
             drone_snapshots.append(result["drone"])
-            drone = proxy_from_snapshot(result["drone"], self.planner)
+            drone = (self.drone_by_id(result["drone"]["drone_id"])
+                     if self.state_source == "neo4j"
+                     else proxy_from_snapshot(result["drone"], self.planner))
             self.record_drone_step_events(result.get("events", []), drone, next_time)
             for payload in result["completed_tasks"]:
                 task = self._apply_completed_task(payload)
                 completed_this_step.append(task)
                 self.knowledge_store.record_completion(next_time, task, drone)
         self.now_minute = next_time
-        self.drones = [proxy_from_snapshot(snapshot, self.planner) for snapshot in drone_snapshots]
+        if self.state_source == "ray":
+            self.drones = [proxy_from_snapshot(snapshot, self.planner) for snapshot in drone_snapshots]
         frame = self.snapshot(completed_this_step)
         self.frames.append(frame)
         if self.before_step_commit is not None:
@@ -575,13 +689,13 @@ class RaySimulationEnv:
         helper_actor = self.actors.get(helper.drone_id)
         if source_actor is None or helper_actor is None:
             return False
-        release = self.ray.get(
-            source_actor.release_task_for_assistance.remote(task.task_id)
-        )
+        release = self._call_actor(source.drone_id, "release_task_for_assistance", task.task_id)
         if not release.get("released"):
             self._replace_drone_from_snapshot(release["drone"])
             return False
         source_after = self._replace_drone_from_snapshot(release["drone"])
+        if self.state_source == "neo4j":
+            release["task"] = self._graph_task_updates[task.task_id][1]
 
         original = task_from_payload(task_to_payload(task))
         configure_assistance_task(
@@ -591,16 +705,15 @@ class RaySimulationEnv:
             reason=reason,
             now_minute=self.now_minute,
         )
-        result = self.ray.get(
-            helper_actor.assign_assistance.remote(task_to_payload(task), self.now_minute)
+        result = self._call_actor(
+            helper.drone_id, "assign_assistance", task_to_payload(task), self.now_minute,
         )
         helper_after = self._replace_drone_from_snapshot(result["drone"])
         if not result.get("accepted"):
             copy_task_state(original, task)
-            restored = self.ray.get(
-                source_actor.restore_task_after_assistance.remote(
-                    release["task"], release["was_onboard"]
-                )
+            restored = self._call_actor(
+                source.drone_id, "restore_task_after_assistance",
+                release["task"], release["was_onboard"],
             )
             self._replace_drone_from_snapshot(restored)
             return False
@@ -649,11 +762,11 @@ class RaySimulationEnv:
                 rejected.add(drone.drone_id)
                 continue
 
-            result = self.ray.get(actor.assign.remote(task_to_payload(task), self.now_minute))
+            result = self._call_actor(drone.drone_id, "assign", task_to_payload(task), self.now_minute)
             self._replace_drone_from_snapshot(result["drone"])
             if result.get("accepted"):
                 self._apply_assigned_task(result["task"])
-                assigned_drone = proxy_from_snapshot(result["drone"], self.planner)
+                assigned_drone = self.drone_by_id(drone.drone_id)
                 self.knowledge_store.record_assignment(self.now_minute, task, assigned_drone)
                 return True
 
@@ -678,6 +791,8 @@ class RaySimulationEnv:
         ]
 
     def _replace_drone_from_snapshot(self, snapshot):
+        if self.state_source == "neo4j":
+            return self.drone_by_id(snapshot["drone_id"])
         proxy = proxy_from_snapshot(snapshot, self.planner)
         for index, drone in enumerate(self.drones):
             if drone.drone_id == proxy.drone_id:
@@ -695,16 +810,19 @@ class RaySimulationEnv:
             task.onboard_drone_id = None
 
     def _apply_assigned_task(self, payload):
+        if self.state_source == "neo4j":
+            task_id = payload["task_id"]
+            if task_id not in self._graph_task_updates:
+                raise KnowledgeStateError(f"Missing KG task update: {task_id}")
+            payload = self._graph_task_updates[task_id][1]
         task = self._task_by_id(payload["task_id"])
         return copy_task_state(task_from_payload(payload), task)
 
     def _apply_completed_task(self, payload):
-        task = self._task_by_id(payload["task_id"])
-        return copy_task_state(task_from_payload(payload), task)
+        return self._apply_assigned_task(payload)
 
     def _apply_picked_task(self, payload):
-        task = self._task_by_id(payload["task_id"])
-        return copy_task_state(task_from_payload(payload), task)
+        return self._apply_assigned_task(payload)
 
     def _task_by_id(self, task_id):
         for task in self.tasks:

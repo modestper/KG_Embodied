@@ -30,6 +30,7 @@ from simulation.delivery_sim import (
 from simulation.planner import build_coordinator_from_env, build_planner_from_env
 from simulation.knowledge import build_knowledge_store_from_env
 from simulation.knowledge_writer import WRITE_MODES, build_delegating_store
+from simulation.knowledge_state import STATE_SOURCES
 from simulation.graph_query import GraphQueryError, GraphQueryService, MAX_REQUEST_BYTES
 
 
@@ -153,6 +154,14 @@ def llm_events(env):
 
 
 def build_runtime(args):
+    state_source = getattr(args, "state_source", os.environ.get("KG_STATE_SOURCE", "ray"))
+    if state_source not in STATE_SOURCES:
+        raise ValueError(f"Unsupported state source: {state_source}")
+    if state_source == "neo4j":
+        if args.backend != "ray":
+            raise ValueError("--state-source neo4j requires --backend ray")
+        if os.environ.get("KG_BACKEND", "memory").lower() not in {"neo4j", "graph"}:
+            raise ValueError("--state-source neo4j requires KG_BACKEND=neo4j")
     write_mode = getattr(args, "kg_write_mode", os.environ.get("KG_WRITE_MODE", "main"))
     if write_mode not in WRITE_MODES:
         raise ValueError(f"Unsupported KG write mode: {write_mode}")
@@ -203,6 +212,7 @@ def build_runtime(args):
                 ray_address=args.ray_address or None,
                 ray_num_cpus=args.ray_num_cpus,
                 charging_depots=list(charging_depots.values()),
+                state_source=state_source,
             )
         else:
             env = SimulationEnv(
@@ -239,6 +249,8 @@ def build_runtime(args):
         "ray_num_cpus": args.ray_num_cpus,
         "kg_write_mode": write_mode,
         "kg_run_id": getattr(knowledge_store, "run_id", None),
+        "state_source": state_source if args.backend == "ray" else "memory",
+        "state_execution_id": getattr(env, "execution_id", None),
     }
     write_run_start(args.llm_log_path, config)
     return env, config, list(charging_depots.values())
@@ -470,8 +482,9 @@ def args_from_request(base_args, path):
     query = parse_qs(urlparse(path).query)
     values = vars(base_args).copy()
     values.setdefault("kg_write_mode", os.environ.get("KG_WRITE_MODE", "main"))
+    values.setdefault("state_source", os.environ.get("KG_STATE_SOURCE", "ray"))
 
-    for key in ("city", "day", "depot_mode", "vllm_api_base", "vllm_model", "backend", "ray_address", "kg_write_mode"):
+    for key in ("city", "day", "depot_mode", "vllm_api_base", "vllm_model", "backend", "ray_address", "kg_write_mode", "state_source"):
         if key in query:
             values[key] = query[key][0]
     for key in (
@@ -499,6 +512,8 @@ def args_from_request(base_args, path):
         values["backend"] = getattr(base_args, "backend", "local")
     if values["kg_write_mode"] not in WRITE_MODES:
         values["kg_write_mode"] = getattr(base_args, "kg_write_mode", "main")
+    if values["state_source"] not in STATE_SOURCES:
+        values["state_source"] = getattr(base_args, "state_source", "ray")
     values["task_limit"] = min(values["task_limit"], 10000)
     values["drone_count"] = min(values["drone_count"], 1000)
     values["max_steps"] = min(values["max_steps"], 100000)
@@ -565,6 +580,7 @@ def parse_args():
     parser.add_argument("--llm-max-tokens", type=int, default=int(os.environ.get("LLM_MAX_TOKENS", "512")))
     parser.add_argument("--backend", choices=["local", "ray"], default="ray")
     parser.add_argument("--kg-write-mode", choices=WRITE_MODES, default=os.environ.get("KG_WRITE_MODE", "main"))
+    parser.add_argument("--state-source", choices=STATE_SOURCES, default=os.environ.get("KG_STATE_SOURCE", "ray"))
     parser.add_argument("--ray-address", default=os.environ.get("RAY_ADDRESS", ""))
     parser.add_argument("--ray-num-cpus", type=int, default=None)
     return parser.parse_args()

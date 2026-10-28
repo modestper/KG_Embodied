@@ -75,6 +75,50 @@ NEO4J_WRITE_ENABLED = bool(os.environ.get("LADE_KG_WRITER_INTEGRATION_URI")) and
 
 @unittest.skipUnless(NEO4J_WRITE_ENABLED, "opt-in isolated Neo4j write tests are not enabled")
 class KnowledgeWriterNeo4jIntegrationTest(RayIntegrationBase):
+    def test_main_reads_runtime_states_with_every_write_mode(self):
+        from neo4j import GraphDatabase
+
+        uri = os.environ["LADE_KG_WRITER_INTEGRATION_URI"]
+        user = os.environ.get("NEO4J_USER", "neo4j")
+        password = os.environ.get("NEO4J_PASSWORD", "")
+        driver = GraphDatabase.driver(uri, auth=(user, password))
+        baseline_tasks, baseline_drones = scenario()
+        baseline = RaySimulationEnv(baseline_tasks, baseline_drones, AuctionCoordinator(),
+                                    step_minutes=1, ray_module=self.ray)
+        try:
+            expected = baseline.step_once()
+        finally:
+            baseline.close()
+        try:
+            for mode in ("main", "ray", "process"):
+                with self.subTest(mode=mode):
+                    run_id = f"kg-state-it-{uuid4()}"
+                    config = KnowledgeWriterConfig(uri=uri, user=user, password=password,
+                                                   run_id=run_id, auto_create_indexes=False)
+                    store = config.build_store(bootstrap=True) if mode == "main" else build_delegating_store(mode, config, self.ray)
+                    tasks, drones = scenario()
+                    env = None
+                    try:
+                        env = RaySimulationEnv(tasks, drones, AuctionCoordinator(), step_minutes=1,
+                                               knowledge_store=store, ray_module=self.ray,
+                                               state_source="neo4j")
+                        self.assertEqual(env.step_once(), expected)
+                        states = store.query_runtime_states(env.execution_id, env._expected_versions)
+                        self.assertEqual(len(states), 2)
+                        self.assertEqual(sum(len(state["snapshot"]["completed_ids"])
+                                             for state in states.values()), 2)
+                        self.assertEqual(env.tasks[0].status, "completed")
+                    finally:
+                        if env is not None:
+                            close_env(env)
+                        else:
+                            store.close()
+                        with driver.session() as session:
+                            session.run("MATCH (n {run_id:$run_id}) DETACH DELETE n", run_id=run_id).consume()
+                            session.run("MATCH (r:Run {id:$run_id}) DETACH DELETE r", run_id=run_id).consume()
+        finally:
+            driver.close()
+
     def test_both_modes_persist_same_business_graph_as_baseline(self):
         from neo4j import GraphDatabase
 
