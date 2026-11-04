@@ -5,10 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f5f7fb" />
     <title>实时仿真 · LaDe 配送模拟</title>
-    <link
-      rel="stylesheet"
-      href="./src/styles.css?v=20261021-details-collapse"
-    />
+    <link rel="stylesheet" href="./src/styles.css?v=20261028-pause" />
   </head>
   <body>
     <a class="skip-link" href="#workspace">跳到主要内容</a>
@@ -226,6 +223,23 @@
             <p id="scenarioCaption">追踪配送进度，观察无人机协作与任务流转。</p>
           </div>
           <div class="topbar-actions">
+            <button
+              id="simulationPause"
+              type="button"
+              disabled
+              aria-pressed="false"
+              title="控制后端仿真；暂停在当前 Step 完成后生效"
+            >
+              暂停仿真
+            </button>
+            <button
+              id="saveTrace"
+              type="button"
+              disabled
+              title="模拟结束后可保存完整轨迹"
+            >
+              保存本次轨迹
+            </button>
             <span
               id="connectionStatus"
               class="connection-badge"
@@ -240,6 +254,22 @@
             >
           </div>
         </header>
+        <p
+          id="simulationControlFeedback"
+          class="simulation-control-feedback"
+          role="status"
+          hidden
+        ></p>
+        <p id="traceSaveResult" class="trace-save-result" role="status" hidden>
+          <span id="traceSaveResultText"></span>
+          <a
+            id="traceReplayLink"
+            href="./simulation.html"
+            target="_blank"
+            rel="noopener"
+            >打开回放 ↗</a
+          >
+        </p>
         <section class="kpis live-kpis" aria-label="实时仿真指标">
           <article class="metric-featured">
             <span>任务完成进度</span><strong id="completedTasks">—</strong
@@ -378,7 +408,7 @@
           <div
             class="timeline"
             aria-label="仿真时间轴"
-            title="拖动滑块回看历史，后台仿真会继续运行"
+            title="拖动滑块回看历史；暂停后台运行请使用“暂停仿真”"
           >
             <button id="goLive" class="timeline-live" type="button" disabled>
               实时</button
@@ -674,7 +704,8 @@ LIMIT $limit</textarea>
               <p class="graph-query-note">
                 同一时刻仅允许一个手动查询。展示上限不限制数据库扫描量，请在
                 Cypher 中限定 run_id、时间范围和
-                LIMIT。暂停/回看页面不会冻结数据库，实时读写与原先静态压测不能直接比较。
+                LIMIT。暂停画面或回看不会停止后台仿真；“暂停仿真”在当前 Step
+                完成后停止推进。实时读写与原先静态压测不能直接比较。
               </p>
             </details>
             <pre
@@ -720,14 +751,59 @@ LIMIT $limit</textarea>
           </div>
         </details>
         <footer class="workspace-footer">
-          <span>LaDe 配送模拟</span
-          ><span>实时观测 · 历史回看 · 协同分析</span>
+          <span>LaDe 配送模拟</span><span>实时观测 · 历史回看 · 协同分析</span>
         </footer>
       </section>
     </main>
-    <script
-      type="module"
-      src="./src/dynamic_app.mjs?v=20261021-details-collapse"
-    ></script>
+    <dialog
+      id="traceSaveDialog"
+      class="trace-save-dialog"
+      aria-labelledby="traceSaveTitle"
+      aria-describedby="traceSaveHint"
+    >
+      <form id="traceSaveForm" class="trace-save-form">
+        <h3 id="traceSaveTitle">保存本次轨迹</h3>
+        <p id="traceSaveHint" class="field-hint">
+          保存到模拟服务器。暂存数据保留至下一次模拟完成或服务重启，请及时保存。
+        </p>
+        <label
+          >当前服务器文件夹
+          <strong id="traceDirectoryCurrent">data/traces</strong></label
+        >
+        <div class="trace-directory-controls">
+          <button id="traceDirectoryUp" type="button" disabled>上一级</button>
+          <select id="traceDirectories" aria-label="服务器子文件夹">
+            <option value="">选择子文件夹进入…</option>
+          </select>
+        </div>
+        <label
+          >新建子文件夹（可选）<input
+            id="traceNewFolder"
+            type="text"
+            maxlength="160"
+            placeholder="例如：重庆实验一"
+        /></label>
+        <label
+          >轨迹文件名<input
+            id="traceFilename"
+            type="text"
+            maxlength="160"
+            required
+        /></label>
+        <p
+          id="traceSaveFeedback"
+          class="field-hint"
+          role="status"
+          aria-live="polite"
+        ></p>
+        <div class="trace-save-actions">
+          <button id="traceSaveCancel" type="button">取消</button>
+          <button id="traceSaveConfirm" class="primary-action" type="submit">
+            保存到服务器
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="./src/dynamic_app.mjs?v=20261028-pause"></script>
   </body>
 </html>

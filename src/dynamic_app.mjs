@@ -8,6 +8,8 @@ import {
   frameStepIndex,
 } from "./dynamic_timeline.mjs?v=20261021-step";
 import { initGraphQueryPanel } from "./dynamic_query.mjs";
+import { initTraceSave } from "./dynamic_trace.mjs?v=20261028-server-traces";
+import { initSimulationControl } from "./dynamic_control.mjs?v=20261028-pause";
 
 import {
   colors,
@@ -29,6 +31,7 @@ import {
 } from "./ui.mjs";
 
 let canvasRenderRequest = 0;
+const traceSave = initTraceSave();
 
 const state = {
   source: null,
@@ -48,6 +51,7 @@ const state = {
   playbackTimer: null,
   streamDone: false,
   donePayload: null,
+  simulationStatus: null,
   wallStartedAt: null,
   wallElapsedMs: 0,
   wallTimer: null,
@@ -131,6 +135,12 @@ const els = {
   llmInput: document.querySelector("#llmInput"),
   llmOutput: document.querySelector("#llmOutput"),
 };
+
+const simulationControl = initSimulationControl((snapshot) => {
+  state.simulationStatus = snapshot;
+  renderRunStatus();
+  renderTimeline();
+});
 
 function init() {
   initDisclosures();
@@ -245,6 +255,7 @@ function connect() {
     state.staticBounds = getBounds(staticPoints);
     state.metrics = payload.metrics ?? null;
     state.stepSeconds = payload.step_seconds ?? null;
+    simulationControl.start(payload.simulation);
     resetView(false);
     render();
   });
@@ -264,6 +275,8 @@ function connect() {
     const payload = JSON.parse(event.data);
     state.streamDone = true;
     state.donePayload = payload;
+    simulationControl.reset();
+    traceSave.complete(payload.trace);
     if (state.timeline.followingLive) {
       applyFinalSummary();
       state.playing = false;
@@ -277,6 +290,7 @@ function connect() {
   source.addEventListener("superseded", () => {
     source.close();
     if (state.source !== source) return;
+    simulationControl.reset();
     state.playing = false;
     state.timeline.hold();
     stopPlaybackTimer();
@@ -286,8 +300,14 @@ function connect() {
     renderRunStatus();
   });
   source.addEventListener("error", () => {
+    if (state.source !== source) return;
+    simulationControl.reset();
     if (els.connectionStatus.dataset.status !== "done")
       setConnection("reconnecting");
+  });
+  source.addEventListener("simulation_state", (event) => {
+    if (state.source === source)
+      simulationControl.update(JSON.parse(event.data));
   });
 }
 
@@ -511,6 +531,8 @@ function renderPlaybackButton() {
 }
 
 function resetRuntime() {
+  simulationControl.reset();
+  traceSave.reset();
   state.config = null;
   state.depots = [];
   state.regions = [];
@@ -713,7 +735,9 @@ function renderTimeline() {
   const mode = timeline.followingLive
     ? state.streamDone
       ? "已结束"
-      : "实时"
+      : state.simulationStatus?.state === "paused"
+        ? "仿真已暂停"
+        : "实时"
     : "回看";
   els.timelineCaption.textContent = `${currentFrame} / ${latestFrame} 帧 · ${timeLabel} · ${mode}`;
 }
@@ -724,6 +748,17 @@ function renderRunStatus() {
     els.runStatusTitle.textContent = "本页运行已被替换";
     els.runStatusDetail.textContent =
       "其他连接已启动新运行，当前保留已接收的历史画面。";
+    return;
+  }
+  const simulation = state.simulationStatus;
+  if (!state.streamDone && ["paused", "pausing"].includes(simulation?.state)) {
+    els.runStatus.dataset.status = "reviewing";
+    els.runStatusTitle.textContent =
+      simulation.state === "paused" ? "仿真已暂停" : "正在暂停仿真";
+    els.runStatusDetail.textContent =
+      simulation.state === "paused"
+        ? `后端停在 Step ${simulation.step_index}，可回看历史；点击“继续仿真”恢复推进。`
+        : "等待当前 Step 完成，完成后不会开始下一步。";
     return;
   }
   const completed = state.metrics?.completed_tasks ?? 0;

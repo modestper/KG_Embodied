@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>数据概览 · LaDe 配送模拟</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261021-status-colors" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261028-overview-map" />
   </head>
   <body>
     <a class="skip-link" href="#workspace">跳到主要内容</a>
@@ -121,7 +121,41 @@
               <h3>坐标抽样与路网</h3>
               <span id="mapCaption">-</span>
             </div>
-            <canvas id="mapCanvas" width="1100" height="650"></canvas>
+            <div class="overview-map-toolbar panel-tools">
+              <label class="overview-boundary-toggle">
+                <input id="regionBoundaryEnabled" type="checkbox" checked />
+                配送区域边界
+              </label>
+              <div class="zoom-controls" role="group" aria-label="地图缩放">
+                <button id="zoomOut" type="button" aria-label="缩小地图">
+                  −
+                </button>
+                <span id="zoomLabel">100%</span>
+                <button id="zoomIn" type="button" aria-label="放大地图">
+                  +
+                </button>
+              </div>
+              <button id="zoomReset" type="button">适配视图</button>
+            </div>
+            <canvas
+              id="mapCanvas"
+              width="1100"
+              height="650"
+              tabindex="0"
+              aria-label="城市抽样坐标、路网和配送区域边界地图"
+              aria-describedby="mapHelp"
+            ></canvas>
+            <div class="map-legend overview-map-legend" aria-label="地图图例">
+              <span><i class="legend-line overview-road"></i>路网</span>
+              <span
+                ><i id="sampleLegendDot" class="legend-dot"></i>抽样坐标</span
+              >
+              <span><i class="legend-line overview-region"></i>区域边界</span>
+              <small>拖动平移 · 滚轮缩放</small>
+            </div>
+            <p id="mapHelp" class="chart-footnote" role="status">
+              正在加载配送区域边界…
+            </p>
           </article>
 
           <article class="panel">
@@ -164,12 +198,11 @@
           </div>
         </section>
         <footer class="workspace-footer">
-          <span>LaDe 配送模拟</span
-          ><span>实时观测 · 历史回看 · 协同分析</span>
+          <span>LaDe 配送模拟</span><span>实时观测 · 历史回看 · 协同分析</span>
         </footer>
       </section>
     </main>
 
-    <script type="module" src="./src/app.mjs?v=20261021-status-colors"></script>
+    <script type="module" src="./src/app.mjs?v=20261028-overview-map"></script>
   </body>
 </html>

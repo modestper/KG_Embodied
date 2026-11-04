@@ -1,6 +1,16 @@
 {
   "traces": [
     {
+      "file": "traces/上海市_20261028_170855_aee32deb.json",
+      "label": "上海市 0925 · 20 tasks · 3 agents",
+      "city": "上海市",
+      "day": "0925",
+      "tasks": 20,
+      "drones": 3,
+      "step_seconds": 20,
+      "size_bytes": 10759752
+    },
+    {
       "file": "delivery_sim_chongqing_1026_12tasks_3agents.json",
       "label": "重庆市 1026 · 12 tasks · 3 agents",
       "city": "重庆市",

@@ -1,16 +1,31 @@
-import { prepareCanvas, roundRect } from "./canvas_utils.mjs?v=20261021-status-colors";
+import {
+  prepareCanvas,
+  roundRect,
+  getBounds,
+  makeProjector,
+  clampZoom,
+  bindCanvasViewport,
+} from "./canvas_utils.mjs?v=20261021-status-colors";
 import { showPageError } from "./ui.mjs";
 import {
   ALL_CITIES,
   buildCityOptions,
   buildFilteredSummary,
   formatCount,
-} from "./data.mjs";
+  getCityRegions,
+} from "./data.mjs?v=20261028-overview-map";
+
+let mapRenderRequest = 0;
 
 const state = {
   dataset: null,
   city: ALL_CITIES,
   taskType: "delivery",
+  boundaries: null,
+  boundaryLoadFailed: false,
+  zoom: 1,
+  panX: 0,
+  panY: 0,
 };
 
 const els = {
@@ -26,14 +41,30 @@ const els = {
   hourChart: document.querySelector("#hourChart"),
   cityTable: document.querySelector("#cityTable"),
   mapCanvas: document.querySelector("#mapCanvas"),
+  zoomIn: document.querySelector("#zoomIn"),
+  zoomOut: document.querySelector("#zoomOut"),
+  zoomReset: document.querySelector("#zoomReset"),
+  zoomLabel: document.querySelector("#zoomLabel"),
+  regionBoundaryEnabled: document.querySelector("#regionBoundaryEnabled"),
+  mapHelp: document.querySelector("#mapHelp"),
+  sampleLegendDot: document.querySelector("#sampleLegendDot"),
 };
 
 async function init() {
-  const response = await fetch("./data/summary.json");
+  const [response, boundaryResponse] = await Promise.all([
+    fetch("./data/summary.json"),
+    fetch("./data/region_boundaries.json").catch(() => null),
+  ]);
   if (!response.ok) {
     throw new Error(`Unable to load summary.json: ${response.status}`);
   }
   state.dataset = await response.json();
+  try {
+    if (!boundaryResponse?.ok) throw new Error("区域边界不可用");
+    state.boundaries = await boundaryResponse.json();
+  } catch {
+    state.boundaryLoadFailed = true;
+  }
   populateCityOptions();
   bindEvents();
   render();
@@ -52,9 +83,59 @@ function bindEvents() {
   });
   els.city.addEventListener("change", () => {
     state.city = els.city.value;
+    resetView();
     render();
   });
-  window.addEventListener("resize", () => renderMap(currentSummary()));
+  els.zoomIn.addEventListener("click", () => setZoom(state.zoom * 1.2));
+  els.zoomOut.addEventListener("click", () => setZoom(state.zoom / 1.2));
+  els.zoomReset.addEventListener("click", resetView);
+  els.regionBoundaryEnabled.addEventListener("change", scheduleMapRender);
+  els.mapCanvas.addEventListener("dblclick", resetView);
+  els.mapCanvas.addEventListener("keydown", (event) => {
+    const pan = {
+      ArrowLeft: [40, 0],
+      ArrowRight: [-40, 0],
+      ArrowUp: [0, 40],
+      ArrowDown: [0, -40],
+    }[event.key];
+    if (pan) {
+      state.panX += pan[0];
+      state.panY += pan[1];
+      scheduleMapRender();
+    } else if (event.key === "+" || event.key === "=") {
+      setZoom(state.zoom * 1.2);
+    } else if (event.key === "-") {
+      setZoom(state.zoom / 1.2);
+    } else if (event.key === "Home") {
+      resetView();
+    } else {
+      return;
+    }
+    event.preventDefault();
+  });
+  bindCanvasViewport(els.mapCanvas, state, scheduleMapRender);
+  window.addEventListener("resize", scheduleMapRender);
+}
+
+function setZoom(value) {
+  state.zoom = clampZoom(value);
+  scheduleMapRender();
+}
+
+function resetView() {
+  state.zoom = 1;
+  state.panX = 0;
+  state.panY = 0;
+  scheduleMapRender();
+}
+
+function scheduleMapRender() {
+  els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+  if (mapRenderRequest) return;
+  mapRenderRequest = requestAnimationFrame(() => {
+    mapRenderRequest = 0;
+    renderMap(currentSummary());
+  });
 }
 
 function currentSummary() {
@@ -77,7 +158,7 @@ function render() {
   els.tableCaption.textContent = `${summary.cityRows.length} cities`;
   renderHourly(summary);
   renderTable(summary);
-  renderMap(summary);
+  scheduleMapRender();
 }
 
 function renderHourly(summary) {
@@ -122,22 +203,44 @@ function formatMinutes(value) {
 
 function renderMap(summary) {
   const { ctx, width, height } = prepareCanvas(els.mapCanvas);
-
+  const regions = getCityRegions(state.boundaries, state.city);
+  const showBoundaries = els.regionBoundaryEnabled.checked;
+  els.mapHelp.textContent = state.boundaryLoadFailed
+    ? "区域边界加载失败，重新加载页面可重试；路网、抽样点和缩放仍可使用。"
+    : `${regions.length} 个配送区域${showBoundaries ? "" : "（边界已隐藏）"} · 边界为配送服务分区示意，派送与揽收共用。聚焦地图后可用方向键平移、+/− 缩放、Home 复位。`;
   const roads = state.dataset.roads.filter(
     (road) => state.city === ALL_CITIES || road.city === state.city,
   );
   const roadPoints = roads.flatMap((road) =>
     road.points.map(([lng, lat]) => ({ lng, lat })),
   );
-  const bounds = getBounds([...roadPoints, ...summary.visibleSamples]);
-  if (!bounds) {
+  const contentPoints = [...roadPoints, ...summary.visibleSamples].map(
+    (point) => ({ x: point.lng, y: point.lat }),
+  );
+  // Keep distant boundary vertices from shrinking the sampled data and roads.
+  const boundsPoints = contentPoints.length
+    ? contentPoints
+    : regions.flatMap((region) =>
+        (region.polygon ?? []).map(([x, y]) => ({ x, y })),
+      );
+  if (!boundsPoints.length) {
     drawEmpty(ctx, width, height);
     return;
   }
-  const project = makeProjector(bounds, width, height);
+  const projectPoint = makeProjector(
+    getBounds(boundsPoints),
+    width,
+    height,
+    state.zoom,
+    state.panX,
+    state.panY,
+  );
+  const project = (point) => projectPoint({ x: point.lng, y: point.lat });
 
   drawMapBackground(ctx, width, height);
+  if (showBoundaries) drawRegionBoundaries(ctx, regions, projectPoint);
 
+  ctx.save();
   ctx.lineWidth = 1.35;
   ctx.strokeStyle = "#8f9ba8";
   ctx.globalAlpha = 0.62;
@@ -150,8 +253,10 @@ function renderMap(summary) {
     });
     ctx.stroke();
   }
+  ctx.restore();
 
   const sampleColor = state.taskType === "pickup" ? "#2866b6" : "#1b8a6b";
+  els.sampleLegendDot.style.backgroundColor = sampleColor;
   ctx.globalAlpha = 1;
   for (const sample of summary.visibleSamples) {
     const point = project(sample);
@@ -164,8 +269,58 @@ function renderMap(summary) {
     ctx.arc(point.x, point.y, 3.2, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (showBoundaries)
+    drawRegionLabels(ctx, regions, projectPoint, width, height);
   drawCityLabels(ctx, summary.visibleSamples, project);
-  drawLegend(ctx, sampleColor, width, height);
+}
+
+function drawRegionBoundaries(ctx, regions, project) {
+  ctx.save();
+  ctx.strokeStyle = "#8666b3";
+  ctx.globalAlpha = 0.65;
+  ctx.lineWidth = 1.2;
+  ctx.lineJoin = "round";
+  for (const region of regions) {
+    const points = (region.polygon ?? [])
+      .map(([x, y]) => ({ x, y }))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+    if (points.length < 3) continue;
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const pixel = project(point);
+      if (index === 0) ctx.moveTo(pixel.x, pixel.y);
+      else ctx.lineTo(pixel.x, pixel.y);
+    });
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawRegionLabels(ctx, regions, project, width, height) {
+  if (state.zoom < 2) return;
+  ctx.save();
+  ctx.font = "600 11px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.fillStyle = "#78589f";
+  for (const region of regions) {
+    if (!region.centroid) continue;
+    const point = project(region.centroid);
+    if (
+      point.x < 20 ||
+      point.x > width - 20 ||
+      point.y < 10 ||
+      point.y > height - 10
+    )
+      continue;
+    const label = `R${region.region_id}`;
+    ctx.strokeText(label, point.x, point.y - 12);
+    ctx.fillText(label, point.x, point.y - 12);
+  }
+  ctx.restore();
 }
 
 function drawMapBackground(ctx, width, height) {
@@ -205,7 +360,7 @@ function drawCityLabels(ctx, samples, project) {
       lng: group.lng / group.count,
       lat: group.lat / group.count,
     });
-    const label = `${city} ${group.count}`;
+    const label = `${city} · 抽样 ${group.count} 点`;
     const width = ctx.measureText(label).width + 16;
     ctx.fillStyle = "rgba(255,255,255,0.92)";
     ctx.strokeStyle = "#d7dde3";
@@ -217,68 +372,6 @@ function drawCityLabels(ctx, samples, project) {
     ctx.fillText(label, point.x, point.y - 17);
   }
   ctx.restore();
-}
-
-function drawLegend(ctx, sampleColor, width, height) {
-  ctx.save();
-  const x = 18;
-  const y = height - 58;
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
-  ctx.strokeStyle = "#d7dde3";
-  roundRect(ctx, x, y, 138, 40, 6);
-  ctx.fill();
-  ctx.stroke();
-  ctx.strokeStyle = "#8f9ba8";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x + 14, y + 15);
-  ctx.lineTo(x + 48, y + 15);
-  ctx.stroke();
-  ctx.fillStyle = sampleColor;
-  ctx.beginPath();
-  ctx.arc(x + 31, y + 28, 4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#3e4650";
-  ctx.font = "12px sans-serif";
-  ctx.fillText("road", x + 58, y + 18);
-  ctx.fillText(state.taskType, x + 58, y + 32);
-  ctx.restore();
-}
-
-function getBounds(points) {
-  const valid = points.filter(
-    (point) => Number.isFinite(point.lng) && Number.isFinite(point.lat),
-  );
-  if (!valid.length) return null;
-  return valid.reduce(
-    (bounds, point) => ({
-      minLng: Math.min(bounds.minLng, point.lng),
-      maxLng: Math.max(bounds.maxLng, point.lng),
-      minLat: Math.min(bounds.minLat, point.lat),
-      maxLat: Math.max(bounds.maxLat, point.lat),
-    }),
-    {
-      minLng: valid[0].lng,
-      maxLng: valid[0].lng,
-      minLat: valid[0].lat,
-      maxLat: valid[0].lat,
-    },
-  );
-}
-
-function makeProjector(bounds, width, height) {
-  const pad = 42;
-  const zoomOut = 0.82;
-  const xRange = bounds.maxLng - bounds.minLng || 1;
-  const yRange = bounds.maxLat - bounds.minLat || 1;
-  const scale =
-    Math.min((width - pad * 2) / xRange, (height - pad * 2) / yRange) * zoomOut;
-  const xOffset = (width - xRange * scale) / 2;
-  const yOffset = (height - yRange * scale) / 2;
-  return (point) => ({
-    x: xOffset + (point.lng - bounds.minLng) * scale,
-    y: height - yOffset - (point.lat - bounds.minLat) * scale,
-  });
 }
 
 function drawEmpty(ctx, width, height) {

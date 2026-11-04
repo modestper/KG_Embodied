@@ -96,6 +96,62 @@ button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
+.trace-save-dialog {
+  width: min(500px, calc(100% - 32px));
+  max-height: calc(100dvh - 40px);
+  margin: auto;
+  padding: 24px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  color: var(--ink);
+  box-shadow: 0 20px 80px #172c5140;
+}
+.trace-save-dialog::backdrop {
+  background: #172c5160;
+}
+.trace-save-form {
+  display: grid;
+  gap: 16px;
+}
+.trace-save-form h3,
+.trace-save-form p {
+  margin: 0;
+}
+.trace-save-form label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.trace-save-form strong {
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.trace-directory-controls {
+  display: flex;
+  gap: 8px;
+}
+.trace-directory-controls button {
+  flex-shrink: 0;
+}
+.trace-save-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.trace-save-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.simulation-control-feedback {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
 .primary-action {
   background: var(--blue);
   border-color: var(--blue);
@@ -1304,6 +1360,48 @@ td:first-child {
 }
 
 /* Overview charts and file loading. */
+.overview-map-toolbar {
+  margin-bottom: 12px;
+}
+.overview-boundary-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  cursor: pointer;
+}
+.overview-boundary-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #8666b3;
+}
+.overview-map-toolbar .zoom-controls {
+  align-items: center;
+}
+.overview-map-toolbar #zoomLabel {
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.map-panel canvas {
+  cursor: grab;
+  touch-action: none;
+}
+.map-panel canvas:active {
+  cursor: grabbing;
+}
+.overview-map-legend .legend-line {
+  display: inline-block;
+  width: 16px;
+  border-top: 2px solid;
+}
+.overview-map-legend .overview-road {
+  border-color: #8f9ba8;
+}
+.overview-map-legend .overview-region {
+  border-color: #8666b3;
+}
 .visual-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(260px, 1fr);

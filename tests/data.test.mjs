@@ -5,6 +5,7 @@ import {
   buildCityOptions,
   buildFilteredSummary,
   formatCount,
+  getCityRegions,
   getHourlySeries,
 } from "../src/data.mjs";
 
@@ -55,8 +56,53 @@ const fixture = {
 };
 
 describe("viewer data helpers", () => {
+  it("selects city boundaries once even when the file contains bilingual aliases", () => {
+    const shanghai = {
+      city: "上海市",
+      regions: [
+        {
+          region_id: "1",
+          polygon: [
+            [0, 0],
+            [2, 0],
+            [1, 2],
+          ],
+        },
+      ],
+    };
+    const hangzhou = {
+      city: "杭州市",
+      regions: [
+        {
+          region_id: "1",
+          polygon: [
+            [3, 0],
+            [5, 0],
+            [4, 2],
+          ],
+        },
+      ],
+    };
+    const boundaries = {
+      cities: { Shanghai: shanghai, 上海市: shanghai, Hangzhou: hangzhou },
+    };
+    assert.deepEqual(
+      getCityRegions(boundaries).map((region) => region.city),
+      ["上海市", "杭州市"],
+    );
+    assert.deepEqual(getCityRegions(boundaries, "杭州市"), [
+      { ...hangzhou.regions[0], city: "杭州市" },
+    ]);
+    assert.deepEqual(getCityRegions(boundaries, "未知城市"), []);
+    assert.deepEqual(getCityRegions(null), []);
+  });
+
   it("builds stable city options with an all-cities entry", () => {
-    assert.deepEqual(buildCityOptions(fixture), ["全部城市", "上海市", "杭州市"]);
+    assert.deepEqual(buildCityOptions(fixture), [
+      "全部城市",
+      "上海市",
+      "杭州市",
+    ]);
   });
 
   it("summarizes all data for the selected task type", () => {
@@ -79,7 +125,9 @@ describe("viewer data helpers", () => {
 
     assert.equal(summary.totalTasks, 6);
     assert.equal(summary.totalCouriers, 4);
-    assert.deepEqual(summary.visibleSamples, [{ city: "杭州市", lng: 5, lat: 6 }]);
+    assert.deepEqual(summary.visibleSamples, [
+      { city: "杭州市", lng: 5, lat: 6 },
+    ]);
   });
 
   it("fills missing hourly buckets with zeroes", () => {

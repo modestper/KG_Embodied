@@ -4,8 +4,22 @@ export function buildCityOptions(dataset) {
   return [ALL_CITIES, ...dataset.cities.map((city) => city.name)];
 }
 
+export function getCityRegions(boundaries, city = ALL_CITIES) {
+  // The boundary file contains both English and Chinese keys for each city.
+  const cities = new Map(
+    Object.values(boundaries?.cities ?? {}).map((entry) => [entry.city, entry]),
+  );
+  return [...cities.values()]
+    .filter((entry) => city === ALL_CITIES || entry.city === city)
+    .flatMap((entry) =>
+      (entry.regions ?? []).map((region) => ({ ...region, city: entry.city })),
+    );
+}
+
 export function getHourlySeries(rows = []) {
-  const countsByHour = new Map(rows.map((row) => [Number(row.hour), Number(row.count)]));
+  const countsByHour = new Map(
+    rows.map((row) => [Number(row.hour), Number(row.count)]),
+  );
   return Array.from({ length: 24 }, (_, hour) => ({
     hour,
     count: countsByHour.get(hour) ?? 0,
@@ -14,7 +28,8 @@ export function getHourlySeries(rows = []) {
 
 export function formatCount(value) {
   const number = Number(value) || 0;
-  if (number >= 1_000_000) return `${roundToSingleDecimal(number / 1_000_000)}M`;
+  if (number >= 1_000_000)
+    return `${roundToSingleDecimal(number / 1_000_000)}M`;
   if (number >= 1_000) return `${roundToSingleDecimal(number / 1_000)}k`;
   return String(number);
 }

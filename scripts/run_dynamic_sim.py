@@ -5,7 +5,6 @@ import os
 import re
 import sys
 import threading
-import time
 from datetime import datetime
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -18,6 +17,8 @@ REGION_BOUNDARY_PATH = VIEWER_ROOT / "data" / "region_boundaries.json"
 sys.path.insert(0, str(VIEWER_ROOT))
 
 from scripts.build_delivery_sim import CITY_FILES
+from scripts.trace_storage import TraceStorage, TraceStorageError
+from scripts.simulation_control import SimulationControl, SimulationControlError
 from simulation.delivery_sim import (
     SimulationEnv,
     build_depot,
@@ -104,22 +105,35 @@ def load_region_boundaries(city):
     return payload.get("cities", {}).get(city, {}).get("regions", [])
 
 
-def stream_simulation(env, config, depots, max_steps, frame_stride=1):
+def stream_simulation(env, config, depots, max_steps, frame_stride=1, on_complete=None, control=None):
+    regions = active_region_boundaries(config.get("city"), env.tasks)
     yield format_sse(
         "init",
         {
             "config": config,
             "depots": depots,
-            "regions": active_region_boundaries(config.get("city"), env.tasks),
+            "regions": regions,
             "tasks": [task_payload(task) for task in env.tasks],
             "metrics": metrics(env),
             "step_seconds": round(env.step_minutes * 60),
+            "simulation": control.snapshot() if control is not None else None,
         },
     )
     steps_run = 0
     for step in range(max_steps):
+        if control is not None:
+            while True:
+                allowed, update = control.next_step()
+                if update is not None:
+                    yield format_sse("simulation_state", update)
+                if allowed is False:
+                    return
+                if allowed is True:
+                    break
         frame = step_once(env)
         steps_run = step + 1
+        if control is not None:
+            control.step_finished(steps_run)
         if step % frame_stride == 0:
             yield format_sse(
                 "frame",
@@ -136,17 +150,19 @@ def stream_simulation(env, config, depots, max_steps, frame_stride=1):
     flush = getattr(env.knowledge_store, "flush", None)
     if flush is not None:
         flush()
-    yield format_sse(
-        "done",
-        {
-            "metrics": metrics(env),
-            "kg_events": env.knowledge_store.events[-20:],
-            "llm_events": llm_events(env)[-10:],
-            "reason": "all_tasks_completed" if env.is_complete() else "max_steps_reached",
-            "steps_run": steps_run,
-            "final_time": env.snapshot([])["time_label"],
-        },
-    )
+    summary = {
+        "metrics": metrics(env),
+        "kg_events": env.knowledge_store.events[-20:],
+        "llm_events": llm_events(env)[-10:],
+        "reason": "all_tasks_completed" if env.is_complete() else "max_steps_reached",
+        "steps_run": steps_run,
+        "final_time": env.snapshot([])["time_label"],
+    }
+    if on_complete is not None:
+        summary["trace"] = on_complete(summary, regions)
+    if control is not None:
+        control.finish()
+    yield format_sse("done", summary)
 
 
 def llm_events(env):
@@ -333,24 +349,35 @@ class planner_environment:
 class DynamicHandler(SimpleHTTPRequestHandler):
     runtime_args = None
     active_env = None
+    active_control = None
     active_env_lock = threading.Lock()
     query_service = None
+    trace_storage = TraceStorage(VIEWER_ROOT / "data")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(VIEWER_ROOT), **kwargs)
 
     @classmethod
-    def replace_active_env(cls, env):
+    def replace_active_env(cls, env, control=None):
         with cls.active_env_lock:
             previous = cls.active_env
+            previous_control = cls.active_control
             cls.active_env = env
+            cls.active_control = control
+        if previous_control is not None:
+            previous_control.finish("superseded")
         close_env(previous)
 
     @classmethod
     def clear_active_env(cls, env):
+        control = None
         with cls.active_env_lock:
             if cls.active_env is env:
                 cls.active_env = None
+                control = cls.active_control
+                cls.active_control = None
+        if control is not None:
+            control.finish("stopped")
         close_env(env)
 
     @classmethod
@@ -367,6 +394,14 @@ class DynamicHandler(SimpleHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if urlparse(self.path).path == "/api/traces/directories":
+            try:
+                relative = parse_qs(urlparse(self.path).query).get("path", [""])[0]
+                return self.send_query_json(200, self.trace_storage.directories(relative))
+            except TraceStorageError as error:
+                return self.send_query_json(error.status, {"ok": False, "error": str(error)})
+            except OSError:
+                return self.send_query_json(500, {"ok": False, "error": "无法读取轨迹目录，请检查服务器目录权限。"})
         if urlparse(self.path).path == "/api/graph-query/config":
             service = self.query_service
             if service is None:
@@ -390,7 +425,8 @@ class DynamicHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if urlparse(self.path).path != "/api/graph-query":
+        route = urlparse(self.path).path
+        if route not in ("/api/graph-query", "/api/traces/save", "/api/simulation/control"):
             return self.send_query_json(404, {"ok": False, "error": "接口不存在。"})
         try:
             # No CORS: a foreign site must not submit queries through the viewer.
@@ -423,17 +459,42 @@ class DynamicHandler(SimpleHTTPRequestHandler):
                 payload = json.loads(body.decode("utf-8"))
             except (ValueError, UnicodeError, RecursionError):
                 raise GraphQueryError("请求体不是合法的 UTF-8 JSON。") from None
+            if route == "/api/traces/save":
+                return self.send_query_json(200, self.trace_storage.save(payload))
+            if route == "/api/simulation/control":
+                return self.send_query_json(200, self.control_simulation(payload))
             if self.query_service is None:
                 raise GraphQueryError("查询服务未启动。", 503)
             return self.send_query_json(200, self.query_service.execute(payload))
-        except GraphQueryError as error:
-            return self.send_query_json(error.status, {"ok": False, "error": str(error), "code": error.code})
+        except (GraphQueryError, TraceStorageError, SimulationControlError) as error:
+            return self.send_query_json(error.status, {"ok": False, "error": str(error),
+                                                      "code": getattr(error, "code", "trace_save_error")})
+        except FileExistsError:
+            return self.send_query_json(409, {"ok": False, "error": "同名轨迹已存在，请更换文件名。"})
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception:
             # Do not return tracebacks, credentials or connection URIs to the browser.
-            logging.getLogger(__name__).exception("Manual graph query failed")
-            return self.send_query_json(500, {"ok": False, "error": "查询服务内部错误，请检查服务端日志。"})
+            logging.getLogger(__name__).exception("Manual request failed: %s", route)
+            message = {"/api/traces/save": "保存失败，请检查服务器磁盘空间、目录权限及日志。",
+                       "/api/simulation/control": "仿真控制失败，请检查服务端日志。"}.get(
+                           route, "查询服务内部错误，请检查服务端日志。")
+            return self.send_query_json(500, {"ok": False, "error": message})
+
+    def control_simulation(self, payload):
+        if not isinstance(payload, dict):
+            raise SimulationControlError("控制请求必须是 JSON 对象。")
+        with self.active_env_lock:
+            control = self.active_control
+            if control is None or payload.get("run_id") != control.run_id:
+                raise SimulationControlError("本次仿真已结束或已被替换，请使用当前运行。", 409)
+        return {"ok": True, "simulation": control.request(payload.get("action"))}
+
+    def retain_completed_trace(self, env, config, depots, summary, regions):
+        with self.active_env_lock:
+            if self.active_env is not env:
+                return None
+            return self.trace_storage.retain(env, config, depots, summary, regions)
 
     def handle_events(self):
         runtime_args = args_from_request(self.runtime_args, self.path)
@@ -448,14 +509,22 @@ class DynamicHandler(SimpleHTTPRequestHandler):
             self.replace_active_env(None)
             initialize_ray_if_needed(runtime_args)
             env, config, depots = build_runtime(runtime_args)
-            self.replace_active_env(env)
-            for event in stream_simulation(env, config, depots, runtime_args.max_steps, runtime_args.frame_stride):
+            control = SimulationControl()
+            self.replace_active_env(env, control)
+            for event in stream_simulation(
+                env, config, depots, runtime_args.max_steps, runtime_args.frame_stride,
+                on_complete=lambda summary, regions: self.retain_completed_trace(env, config, depots, summary, regions),
+                control=control,
+            ):
                 if not self.is_active_env(env):
                     self.notify_superseded()
                     return
                 self.wfile.write(event.encode("utf-8"))
                 self.wfile.flush()
-                time.sleep(runtime_args.wall_interval)
+                if event.startswith(("event: init\n", "event: frame\n")):
+                    control.wait_interval(runtime_args.wall_interval)
+            if not self.is_active_env(env):
+                self.notify_superseded()
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception:

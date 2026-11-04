@@ -61,7 +61,7 @@ async function init() {
 }
 
 async function loadTraceIndex() {
-  const response = await fetch("./data/traces.json");
+  const response = await fetch("./data/traces.json", { cache: "no-store" });
   if (!response.ok)
     throw new Error(`Unable to load traces.json: ${response.status}`);
   const payload = await response.json();
@@ -117,7 +117,7 @@ async function loadSelectedTrace() {
   scheduleCanvasRender();
   try {
     const response = await fetch(
-      `./data/${encodeURIComponent(state.traceFile)}`,
+      `./data/${state.traceFile.split("/").map(encodeURIComponent).join("/")}`,
       { signal: state.loadController.signal },
     );
     if (!response.ok)
