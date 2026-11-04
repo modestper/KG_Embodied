@@ -43,3 +43,8 @@ test50/
 
 
 /logs
+
+
+/data/traces/
+/data/traces.json
+/data/.traces.lock

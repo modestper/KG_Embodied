@@ -123,6 +123,7 @@ const els = {
   taskTable: document.querySelector("#taskTable"),
   eventCaption: document.querySelector("#eventCaption"),
   eventList: document.querySelector("#eventList"),
+  toggleRecentEvents: document.querySelector("#toggleRecentEvents"),
   completionProgress: document.querySelector("#completionProgress"),
   taskFilter: document.querySelector("#taskFilter"),
   taskSearch: document.querySelector("#taskSearch"),
@@ -153,22 +154,11 @@ function init() {
 }
 
 function bindEvents() {
-  els.toggleRunDetails.addEventListener("click", () => {
-    const collapse =
-      els.toggleRunDetails.getAttribute("aria-expanded") === "true";
-    els.runDetailsContent.hidden = collapse;
-    document.querySelector("#statusTabs").hidden = collapse;
-    els.toggleRunDetails.setAttribute("aria-expanded", String(!collapse));
-    els.toggleRunDetails.setAttribute(
-      "aria-label",
-      `${collapse ? "展开" : "收起"}运行明细`,
-    );
-    els.toggleRunDetails.querySelector(".collapse-label").textContent = collapse
-      ? "展开"
-      : "收起";
-    els.toggleRunDetails.closest(".data-panel").dataset.collapsed =
-      String(collapse);
-  });
+  bindPanelCollapse(els.toggleRunDetails, "运行明细", [
+    els.runDetailsContent,
+    document.querySelector("#statusTabs"),
+  ]);
+  bindPanelCollapse(els.toggleRecentEvents, "最近事件", [els.eventList]);
   els.playPause.addEventListener("click", togglePlayback);
   els.goLive.addEventListener("click", goToLiveFrame);
   els.timelineProgress.addEventListener("pointerdown", beginTimelineScrub);
@@ -225,6 +215,19 @@ function bindEvents() {
   window.addEventListener("pointerup", endTimelineScrub);
   window.addEventListener("pointercancel", endTimelineScrub);
   window.addEventListener("resize", scheduleCanvasRender);
+}
+
+function bindPanelCollapse(button, title, content) {
+  button.addEventListener("click", () => {
+    const collapse = button.getAttribute("aria-expanded") === "true";
+    for (const element of content) element.hidden = collapse;
+    button.setAttribute("aria-expanded", String(!collapse));
+    button.setAttribute("aria-label", `${collapse ? "展开" : "收起"}${title}`);
+    button.querySelector(".collapse-label").textContent = collapse
+      ? "展开"
+      : "收起";
+    button.closest(".panel").dataset.collapsed = String(collapse);
+  });
 }
 
 function connect() {

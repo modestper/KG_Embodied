@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f5f7fb" />
     <title>实时仿真 · LaDe 配送模拟</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261028-pause" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261104-event-collapse" />
   </head>
   <body>
     <a class="skip-link" href="#workspace">跳到主要内容</a>
@@ -572,13 +572,38 @@
               </div>
             </div>
           </section>
-          <section class="panel event-panel">
+          <section
+            class="panel event-panel"
+            aria-labelledby="recentEventsTitle"
+            data-collapsed="false"
+          >
             <div class="panel-head">
               <div class="panel-title">
                 <span class="section-number">03</span>
-                <h3>最近事件</h3>
+                <h3 id="recentEventsTitle">最近事件</h3>
               </div>
-              <span id="eventCaption" class="count-badge">0 条</span>
+              <div class="event-panel-actions">
+                <span id="eventCaption" class="count-badge">0 条</span>
+                <button
+                  id="toggleRecentEvents"
+                  class="panel-collapse"
+                  type="button"
+                  aria-expanded="true"
+                  aria-controls="eventList"
+                  aria-label="收起最近事件"
+                >
+                  <span class="collapse-label">收起</span>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    aria-hidden="true"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+              </div>
             </div>
             <ol id="eventList" class="event-list">
               <li class="empty-state">等待任务事件</li>
@@ -804,6 +829,9 @@ LIMIT $limit</textarea>
         </div>
       </form>
     </dialog>
-    <script type="module" src="./src/dynamic_app.mjs?v=20261028-pause"></script>
+    <script
+      type="module"
+      src="./src/dynamic_app.mjs?v=20261104-event-collapse"
+    ></script>
   </body>
 </html>

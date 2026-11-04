@@ -892,13 +892,15 @@ canvas {
   align-items: start;
   gap: 20px;
 }
-.data-panel-actions {
+.data-panel-actions,
+.event-panel-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
-.data-panel[data-collapsed="true"] > .panel-head {
+.data-panel[data-collapsed="true"] > .panel-head,
+.event-panel[data-collapsed="true"] > .panel-head {
   margin-bottom: 0;
 }
 .panel-collapse {
