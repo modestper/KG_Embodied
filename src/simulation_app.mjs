@@ -10,6 +10,17 @@ import {
   resolveTaskStatus,
 } from "./canvas_utils.mjs?v=20261021-status-colors";
 import { escapeHtml, droneStatusBadge, showPageError } from "./ui.mjs";
+import {
+  loadRegionBoundaries,
+  buildCityRegionMap,
+  regionBoundaryCaption,
+  drawCityRegions,
+} from "./city_regions.mjs?v=20261104-fixed-regions";
+import {
+  loadDepotCatalog,
+  buildCityDepots,
+  drawCityDepots,
+} from "./city_depots.mjs?v=20261104-inactive-depots";
 
 let canvasRenderRequest = 0;
 
@@ -27,6 +38,20 @@ const state = {
   loadSequence: 0,
   loadController: null,
   staticBounds: null,
+  taskBounds: null,
+  mapFocus: "regions",
+  city: null,
+  boundaries: null,
+  boundaryStatus: "loading",
+  regions: [],
+  depotCatalog: null,
+  mapDepots: [],
+  regionBoundary: {
+    enabled: true,
+    width: 0.8,
+    opacity: 0.35,
+    color: "#26323b",
+  },
 };
 
 const els = {
@@ -43,6 +68,7 @@ const els = {
   zoomIn: document.querySelector("#zoomIn"),
   zoomOut: document.querySelector("#zoomOut"),
   zoomReset: document.querySelector("#zoomReset"),
+  zoomTasks: document.querySelector("#zoomTasks"),
   zoomLabel: document.querySelector("#zoomLabel"),
   agentCaption: document.querySelector("#agentCaption"),
   progress: document.querySelector("#replayProgress"),
@@ -51,9 +77,40 @@ const els = {
   scenarioCaption: document.querySelector("#scenarioCaption"),
   fileInfo: document.querySelector("#traceFileInfo"),
   agentTable: document.querySelector("#agentTable"),
+  regionBoundaryEnabled: document.querySelector("#regionBoundaryEnabled"),
+  regionBoundaryWidth: document.querySelector("#regionBoundaryWidth"),
+  regionBoundaryOpacity: document.querySelector("#regionBoundaryOpacity"),
+  regionBoundaryColor: document.querySelector("#regionBoundaryColor"),
+  regionBoundaryStatus: document.querySelector("#regionBoundaryStatus"),
+  depotCatalogStatus: document.querySelector("#depotCatalogStatus"),
 };
 
 async function init() {
+  void loadDepotCatalog()
+    .then((catalog) => {
+      state.depotCatalog = catalog;
+    })
+    .catch(() => {
+      els.depotCatalogStatus.hidden = false;
+      els.depotCatalogStatus.textContent =
+        "完整配送站数据加载失败，仅显示轨迹记录的站点；刷新页面可重试。";
+    })
+    .finally(() => {
+      updateCityDepots();
+      scheduleCanvasRender();
+    });
+  void loadRegionBoundaries()
+    .then((boundaries) => {
+      state.boundaries = boundaries;
+      state.boundaryStatus = "ready";
+    })
+    .catch(() => {
+      state.boundaryStatus = "error";
+    })
+    .finally(() => {
+      updateCityRegions();
+      scheduleCanvasRender();
+    });
   await loadTraceIndex();
   bindEvents();
   await loadSelectedTrace();
@@ -91,6 +148,12 @@ async function loadSelectedTrace() {
   stop();
   state.loading = true;
   state.trace = null;
+  state.city = null;
+  state.regions = [];
+  state.mapDepots = [];
+  state.staticBounds = null;
+  state.taskBounds = null;
+  els.regionBoundaryStatus.textContent = "正在加载轨迹对应城市的全部区域…";
   els.playPause.disabled = true;
   els.reset.disabled = true;
   els.progress.disabled = true;
@@ -128,13 +191,20 @@ async function loadSelectedTrace() {
       throw new Error("轨迹文件没有可回放的帧。");
     state.trace = trace;
     state.frameIndex = 0;
-    state.staticBounds = getBounds([
+    state.taskBounds = getBounds([
       ...(trace.tasks ?? []),
+      ...(trace.tasks ?? []).map((task) => ({
+        x: task.pickup_x,
+        y: task.pickup_y,
+      })),
       ...(trace.depots ?? []),
       trace.config?.depot,
     ]);
     const config = trace.config ?? {};
     const city = config.city || entry?.city || "配送";
+    state.city = city;
+    updateCityDepots();
+    updateCityRegions();
     els.scenarioTitle.textContent = `${city} · 轨迹回放`;
     els.scenarioCaption.textContent = `${config.day || entry?.day || "全部日期"} · ${trace.metrics.total_tasks} 个任务 · ${trace.metrics.drones} 架无人机 · ${trace.frames.length.toLocaleString()} 帧`;
     els.fileInfo.textContent = `${size}已加载 ${trace.frames.length.toLocaleString()} 帧`;
@@ -184,6 +254,18 @@ function bindEvents() {
   els.zoomIn.addEventListener("click", () => setZoom(state.zoom * 1.2));
   els.zoomOut.addEventListener("click", () => setZoom(state.zoom / 1.2));
   els.zoomReset.addEventListener("click", resetView);
+  els.zoomTasks.addEventListener("click", () => resetView("tasks"));
+  for (const control of [
+    els.regionBoundaryEnabled,
+    els.regionBoundaryWidth,
+    els.regionBoundaryOpacity,
+    els.regionBoundaryColor,
+  ]) {
+    control.addEventListener(
+      control === els.regionBoundaryEnabled ? "change" : "input",
+      updateRegionBoundaryStyle,
+    );
+  }
   bindCanvasViewport(els.canvas, state, scheduleCanvasRender);
   els.progress.addEventListener("input", () => {
     if (!state.trace) return;
@@ -230,10 +312,40 @@ function setZoom(value) {
   scheduleCanvasRender();
 }
 
-function resetView() {
+function resetView(focus = "regions") {
+  state.mapFocus = focus === "tasks" ? "tasks" : "regions";
   state.zoom = 1;
   state.panX = 0;
   state.panY = 0;
+  scheduleCanvasRender();
+}
+
+function updateCityRegions() {
+  const map = buildCityRegionMap(state.boundaries, state.city);
+  state.regions = map.regions;
+  state.staticBounds = map.bounds;
+  els.regionBoundaryStatus.textContent = regionBoundaryCaption(
+    state.regions,
+    state.boundaryStatus,
+  );
+}
+
+function updateCityDepots() {
+  state.mapDepots = buildCityDepots(
+    state.depotCatalog,
+    state.city,
+    state.trace?.depots ?? [],
+    state.trace?.tasks ?? [],
+  );
+}
+
+function updateRegionBoundaryStyle() {
+  state.regionBoundary = {
+    enabled: els.regionBoundaryEnabled.checked,
+    width: Number(els.regionBoundaryWidth.value),
+    opacity: Number(els.regionBoundaryOpacity.value),
+    color: els.regionBoundaryColor.value,
+  };
   scheduleCanvasRender();
 }
 
@@ -288,23 +400,26 @@ function renderCanvas(frame = currentFrame()) {
     ctx.textAlign = "start";
     return;
   }
-  const bounds = state.staticBounds;
-  const points = bounds
-    ? [
-        { x: bounds.minX, y: bounds.minY },
-        { x: bounds.maxX, y: bounds.maxY },
-        ...frame.drones,
-      ]
-    : frame.drones;
+  const bounds =
+    state.mapFocus === "tasks"
+      ? state.taskBounds
+      : (state.staticBounds ?? state.taskBounds);
   const project = makeProjector(
-    getBounds(points),
+    bounds ?? getBounds([]),
     width,
     height,
     state.zoom,
     state.panX,
     state.panY,
   );
-  drawDepots(ctx, project);
+  drawCityRegions(
+    ctx,
+    project,
+    state.regions,
+    state.regionBoundary,
+    state.zoom,
+  );
+  drawCityDepots(ctx, project, state.mapDepots, state.zoom);
   drawTasks(ctx, project, frame);
   drawRoutes(ctx, project, frame);
   drawDrones(ctx, project, frame);
@@ -336,26 +451,6 @@ function drawRoutes(ctx, project, frame) {
     ctx.stroke();
     ctx.restore();
   }
-}
-
-function drawDepots(ctx, project) {
-  ctx.save();
-  ctx.font = "600 12px sans-serif";
-  for (const depot of state.trace.depots ?? []) {
-    const point = project(depot);
-    ctx.fillStyle = "#20242a";
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.rect(point.x - 5, point.y - 5, 10, 10);
-    ctx.fill();
-    ctx.stroke();
-    if (state.zoom >= 2.5) {
-      ctx.fillStyle = "#20242a";
-      ctx.fillText(`R${depot.region_id}`, point.x + 8, point.y - 8);
-    }
-  }
-  ctx.restore();
 }
 
 function drawDrones(ctx, project, frame) {

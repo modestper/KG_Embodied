@@ -754,6 +754,10 @@ canvas {
   border-radius: 1px;
   background: #3c4960;
 }
+.legend-dot.depot-inactive {
+  border-radius: 1px;
+  background: #9aa4b2;
+}
 .legend-dot.requester {
   width: 8px;
   height: 8px;

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f5f7fb" />
     <title>实时仿真 · LaDe 配送模拟</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261104-event-collapse" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261104-inactive-depots" />
   </head>
   <body>
     <a class="skip-link" href="#workspace">跳到主要内容</a>
@@ -369,7 +369,8 @@
                   +
                 </button>
               </div>
-              <button id="zoomReset" type="button">适配视图</button
+              <button id="zoomReset" type="button">全部区域</button
+              ><button id="zoomTasks" type="button">聚焦任务</button
               ><span id="zoomLabel" class="sr-only">100%</span>
             </div>
           </div>
@@ -386,11 +387,21 @@
             ><span><i class="legend-dot assigned"></i>取货中</span
             ><span><i class="legend-dot picked-up"></i>配送中</span
             ><span><i class="legend-dot completed"></i>已完成</span
-            ><span><i class="legend-dot depot"></i>配送站</span
+            ><span><i class="legend-dot depot"></i>有任务配送站</span
+            ><span><i class="legend-dot depot-inactive"></i>无任务配送站</span
             ><span><i class="legend-dot requester"></i>求助</span
             ><span><i class="legend-dot helper"></i>支援</span
             ><small>拖动平移 · 滚轮缩放</small>
           </div>
+          <p id="regionBoundaryStatus" class="chart-footnote" role="status">
+            正在加载全城区域边界…
+          </p>
+          <p
+            id="depotCatalogStatus"
+            class="chart-footnote"
+            role="status"
+            hidden
+          ></p>
           <div class="playback-toolbar">
             <div class="playback-actions">
               <button id="playPause" class="primary-action" type="button">
@@ -831,7 +842,7 @@ LIMIT $limit</textarea>
     </dialog>
     <script
       type="module"
-      src="./src/dynamic_app.mjs?v=20261104-event-collapse"
+      src="./src/dynamic_app.mjs?v=20261104-inactive-depots"
     ></script>
   </body>
 </html>

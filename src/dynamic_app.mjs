@@ -1,4 +1,14 @@
-import { buildDynamicRegions, outlinePoints } from "./dynamic_regions.mjs";
+import {
+  loadRegionBoundaries,
+  buildCityRegionMap,
+  regionBoundaryCaption,
+  drawCityRegions,
+} from "./city_regions.mjs?v=20261104-fixed-regions";
+import {
+  loadDepotCatalog,
+  buildCityDepots,
+  drawCityDepots,
+} from "./city_depots.mjs?v=20261104-inactive-depots";
 import {
   assistanceRoleForDrone,
   assistanceVisuals,
@@ -37,7 +47,11 @@ const state = {
   source: null,
   config: null,
   depots: [],
+  depotCatalog: null,
+  mapDepots: [],
   regions: [],
+  boundaries: null,
+  boundaryStatus: "loading",
   tasks: [],
   frame: null,
   metrics: null,
@@ -62,6 +76,8 @@ const state = {
   assistanceAutoPaused: false,
   assistanceRoles: new Map(),
   staticBounds: null,
+  taskBounds: null,
+  mapFocus: "regions",
   taskPage: 0,
   regionBoundary: {
     enabled: true,
@@ -112,11 +128,14 @@ const els = {
   zoomIn: document.querySelector("#zoomIn"),
   zoomOut: document.querySelector("#zoomOut"),
   zoomReset: document.querySelector("#zoomReset"),
+  zoomTasks: document.querySelector("#zoomTasks"),
   zoomLabel: document.querySelector("#zoomLabel"),
   regionBoundaryEnabled: document.querySelector("#regionBoundaryEnabled"),
   regionBoundaryWidth: document.querySelector("#regionBoundaryWidth"),
   regionBoundaryOpacity: document.querySelector("#regionBoundaryOpacity"),
   regionBoundaryColor: document.querySelector("#regionBoundaryColor"),
+  regionBoundaryStatus: document.querySelector("#regionBoundaryStatus"),
+  depotCatalogStatus: document.querySelector("#depotCatalogStatus"),
   agentCaption: document.querySelector("#agentCaption"),
   agentTable: document.querySelector("#agentTable"),
   taskCaption: document.querySelector("#taskCaption"),
@@ -149,6 +168,31 @@ function init() {
   bindEvents();
   updateSettingsVisibility();
   void initGraphQueryPanel();
+  void loadDepotCatalog()
+    .then((catalog) => {
+      state.depotCatalog = catalog;
+    })
+    .catch(() => {
+      els.depotCatalogStatus.hidden = false;
+      els.depotCatalogStatus.textContent =
+        "完整配送站数据加载失败，仅显示本次运行记录的站点；刷新页面可重试。";
+    })
+    .finally(() => {
+      updateCityDepots();
+      scheduleCanvasRender();
+    });
+  void loadRegionBoundaries()
+    .then((boundaries) => {
+      state.boundaries = boundaries;
+      state.boundaryStatus = "ready";
+    })
+    .catch(() => {
+      state.boundaryStatus = "error";
+    })
+    .finally(() => {
+      updateCityRegions();
+      scheduleCanvasRender();
+    });
   connect();
   renderEmpty();
 }
@@ -201,6 +245,7 @@ function bindEvents() {
   els.zoomIn.addEventListener("click", () => setZoom(state.zoom * 1.2));
   els.zoomOut.addEventListener("click", () => setZoom(state.zoom / 1.2));
   els.zoomReset.addEventListener("click", resetView);
+  els.zoomTasks.addEventListener("click", () => resetView(true, "tasks"));
   els.regionBoundaryEnabled.addEventListener(
     "change",
     updateRegionBoundaryStyle,
@@ -246,16 +291,13 @@ function connect() {
     state.config = payload.config;
     state.depots = payload.depots ?? [];
     state.tasks = payload.tasks ?? [];
-    state.regions = payload.regions?.length
-      ? payload.regions
-      : buildDynamicRegions(state.tasks);
-    const staticPoints = [
+    updateCityDepots();
+    state.taskBounds = getBounds([
       ...state.tasks,
       ...state.tasks.map((task) => ({ x: task.pickup_x, y: task.pickup_y })),
       ...state.depots,
-      ...state.regions.flatMap(outlinePoints),
-    ];
-    state.staticBounds = getBounds(staticPoints);
+    ]);
+    updateCityRegions();
     state.metrics = payload.metrics ?? null;
     state.stepSeconds = payload.step_seconds ?? null;
     simulationControl.start(payload.simulation);
@@ -538,6 +580,7 @@ function resetRuntime() {
   traceSave.reset();
   state.config = null;
   state.depots = [];
+  state.mapDepots = [];
   state.regions = [];
   state.tasks = [];
   state.frame = null;
@@ -556,6 +599,8 @@ function resetRuntime() {
   state.assistanceAutoPaused = false;
   state.assistanceRoles = new Map();
   state.staticBounds = null;
+  state.taskBounds = null;
+  state.mapFocus = "regions";
   state.taskPage = 0;
   renderEmpty();
 }
@@ -578,7 +623,8 @@ function setZoom(value) {
   scheduleCanvasRender();
 }
 
-function resetView(shouldRender = true) {
+function resetView(shouldRender = true, focus = "regions") {
+  state.mapFocus = focus;
   state.zoom = 1;
   state.panX = 0;
   state.panY = 0;
@@ -603,6 +649,25 @@ function updateRegionBoundaryStyle() {
     color: els.regionBoundaryColor.value || "#26323b",
   };
   scheduleCanvasRender();
+}
+
+function updateCityRegions() {
+  const map = buildCityRegionMap(state.boundaries, state.config?.city);
+  state.regions = map.regions;
+  state.staticBounds = map.bounds;
+  els.regionBoundaryStatus.textContent = regionBoundaryCaption(
+    state.regions,
+    state.boundaryStatus,
+  );
+}
+
+function updateCityDepots() {
+  state.mapDepots = buildCityDepots(
+    state.depotCatalog,
+    state.config?.city,
+    state.depots,
+    state.tasks,
+  );
 }
 
 function normalizedFloat(value, fallback) {
@@ -638,6 +703,9 @@ function renderEmpty() {
   els.llmCaption.textContent = "等待仿真初始化";
   els.runCaption.textContent = "正在初始化场景";
   els.scenarioCaption.textContent = "正在连接仿真服务，等待场景数据。";
+  els.regionBoundaryStatus.textContent = state.config
+    ? regionBoundaryCaption(state.regions, state.boundaryStatus)
+    : "等待场景，地图将展示所选城市的全部区域。";
   els.llmInput.textContent = "-";
   els.llmOutput.textContent = "-";
   renderRunStatus();
@@ -677,7 +745,7 @@ function render() {
   els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
   const city = state.config.city;
   els.runCaption.textContent = `${city} · ${state.config.day} · ${state.config.drone_count} 架无人机 · ${state.config.task_limit} 个任务`;
-  els.scenarioCaption.textContent = `${city} · ${state.config.day} · ${state.config.region_count} 个区域 · ${state.config.llm_enabled ? "LLM 智能调度" : "规则协同调度"}`;
+  els.scenarioCaption.textContent = `${city} · ${state.config.day} · 任务涉及 ${state.config.region_count} 个区域 · ${state.config.llm_enabled ? "LLM 智能调度" : "规则协同调度"}`;
   els.scenarioCaption.title = [
     state.config.backend,
     rayConfigLabel(state.config),
@@ -1045,21 +1113,17 @@ function formatEvent(event) {
 
 function renderCanvas() {
   const frame = state.frame;
-  if (!frame) {
+  if (!state.config) {
     drawEmptyCanvas();
     return;
   }
   const { ctx, width, height } = prepareCanvas(els.canvas);
-  const bounds = state.staticBounds;
-  const points = bounds
-    ? [
-        { x: bounds.minX, y: bounds.minY },
-        { x: bounds.maxX, y: bounds.maxY },
-        ...frame.drones,
-      ]
-    : frame.drones;
+  const bounds =
+    state.mapFocus === "tasks"
+      ? state.taskBounds
+      : (state.staticBounds ?? state.taskBounds);
   const project = makeProjector(
-    getBounds(points),
+    bounds ?? getBounds([]),
     width,
     height,
     state.zoom,
@@ -1067,8 +1131,15 @@ function renderCanvas() {
     state.panY,
   );
   drawGrid(ctx, width, height);
-  drawRegionOutlines(ctx, project, currentRegions());
-  drawDepots(ctx, project);
+  drawCityRegions(
+    ctx,
+    project,
+    state.regions,
+    state.regionBoundary,
+    state.zoom,
+  );
+  drawCityDepots(ctx, project, state.mapDepots, state.zoom);
+  if (!frame) return;
   drawPickupLinks(ctx, project, frame);
   drawTasks(ctx, project, frame);
   drawRoutes(ctx, project, frame);
@@ -1083,70 +1154,6 @@ function drawEmptyCanvas() {
   ctx.textAlign = "center";
   ctx.fillText("正在连接仿真，等待首帧数据", width / 2, height / 2);
   ctx.textAlign = "start";
-}
-
-function drawRegionOutlines(ctx, project, regions) {
-  if (!regions.length || !state.regionBoundary.enabled) return;
-  ctx.save();
-  ctx.lineWidth = state.regionBoundary.width;
-  ctx.globalAlpha = state.regionBoundary.opacity;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  for (const region of regions) {
-    const points = outlinePoints(region);
-    if (points.length < 2) continue;
-    ctx.strokeStyle = state.regionBoundary.color;
-    drawClosedPath(ctx, points.map(project));
-  }
-  ctx.restore();
-
-  if (state.zoom < 2) return;
-  ctx.save();
-  ctx.font = "600 11px sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.globalAlpha = 0.5;
-  for (const [index, region] of regions.entries()) {
-    if (!region.centroid) continue;
-    const point = project(region.centroid);
-    ctx.fillStyle = colors[index % colors.length];
-    ctx.fillText(`R${region.region_id}`, point.x, point.y - 12);
-  }
-  ctx.restore();
-}
-
-function drawClosedPath(ctx, points) {
-  ctx.beginPath();
-  for (const [index, point] of points.entries()) {
-    if (index === 0) ctx.moveTo(point.x, point.y);
-    else ctx.lineTo(point.x, point.y);
-  }
-  if (points.length >= 3) ctx.closePath();
-  ctx.stroke();
-}
-
-function currentRegions() {
-  return state.regions;
-}
-
-function drawDepots(ctx, project) {
-  ctx.save();
-  ctx.font = "600 12px sans-serif";
-  for (const depot of state.depots) {
-    const point = project(depot);
-    ctx.fillStyle = "#20242a";
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.rect(point.x - 5, point.y - 5, 10, 10);
-    ctx.fill();
-    ctx.stroke();
-    if (state.zoom >= 2.5) {
-      ctx.fillStyle = "#20242a";
-      ctx.fillText(`R${depot.region_id}`, point.x + 8, point.y - 8);
-    }
-  }
-  ctx.restore();
 }
 
 function drawPickupLinks(ctx, project, frame) {

@@ -5,12 +5,13 @@ export function buildCityOptions(dataset) {
 }
 
 export function getCityRegions(boundaries, city = ALL_CITIES) {
+  const cityName = boundaries?.cities?.[city]?.city ?? city;
   // The boundary file contains both English and Chinese keys for each city.
   const cities = new Map(
     Object.values(boundaries?.cities ?? {}).map((entry) => [entry.city, entry]),
   );
   return [...cities.values()]
-    .filter((entry) => city === ALL_CITIES || entry.city === city)
+    .filter((entry) => cityName === ALL_CITIES || entry.city === cityName)
     .flatMap((entry) =>
       (entry.regions ?? []).map((region) => ({ ...region, city: entry.city })),
     );

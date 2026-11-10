@@ -93,6 +93,10 @@ describe("viewer data helpers", () => {
     assert.deepEqual(getCityRegions(boundaries, "杭州市"), [
       { ...hangzhou.regions[0], city: "杭州市" },
     ]);
+    assert.deepEqual(
+      getCityRegions(boundaries, "Hangzhou"),
+      getCityRegions(boundaries, "杭州市"),
+    );
     assert.deepEqual(getCityRegions(boundaries, "未知城市"), []);
     assert.deepEqual(getCityRegions(null), []);
   });
