@@ -27,7 +27,10 @@ logs/
 
 test_single/
 test_stage/
-test50/
+
+# Generated query results in root directories such as test50, test50ray,
+# th_test50, notest50, and test100.
+/*test[0-9]*/
 
 
 /.ray_tmp/
